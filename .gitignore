@@ -7,3 +7,6 @@ __pycache__/
 certs/*.crt
 certs/*.key
 data/
+venv/
+.venv/
+.md
