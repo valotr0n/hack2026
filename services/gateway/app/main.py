@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel
 
+from .auth import create_access_token, require_auth, verify_credentials
 from .config import settings
 
 logging.basicConfig(
@@ -79,13 +81,38 @@ async def log_requests(request: Request, call_next):
         )
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 @app.get("/")
 async def root() -> dict[str, str]:
     return {
         "service": "gateway",
         "status": "ok",
-        "routes": "/api/rag/*, /api/content/*, /health",
+        "routes": "/api/rag/*, /api/content/*, /health, /auth/login",
     }
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(req: LoginRequest) -> TokenResponse:
+    if not verify_credentials(req.username, req.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный логин или пароль",
+        )
+    return TokenResponse(access_token=create_access_token(req.username))
+
+
+@app.get("/auth/me")
+async def me(username: str = Depends(require_auth)) -> dict[str, str]:
+    return {"username": username}
 
 
 def _filter_request_headers(request: Request) -> dict[str, str]:
@@ -118,13 +145,14 @@ async def _proxy_request(
     if query:
         url = f"{url}?{query}"
 
+    body = await request.body()
+    headers = _filter_request_headers(request)
+
     try:
-        upstream_response = await client.request(
-            request.method,
-            url,
-            content=await request.body(),
-            headers=_filter_request_headers(request),
+        upstream_request = client.build_request(
+            request.method, url, content=body, headers=headers
         )
+        upstream_response = await client.send(upstream_request, stream=True)
     except httpx.RequestError as exc:
         logger.warning("upstream request failed url=%s error=%s", url, exc)
         return JSONResponse(
@@ -132,17 +160,41 @@ async def _proxy_request(
             content={"detail": "Upstream service unavailable", "upstream": upstream_base_url},
         )
 
+    content_type = upstream_response.headers.get("content-type", "")
+    response_headers = _filter_response_headers(upstream_response.headers)
+
+    if "text/event-stream" in content_type:
+        async def event_stream():
+            try:
+                async for chunk in upstream_response.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream_response.aclose()
+
+        return StreamingResponse(
+            event_stream(),
+            status_code=upstream_response.status_code,
+            headers=response_headers,
+            media_type="text/event-stream",
+        )
+
+    content = await upstream_response.aread()
+    await upstream_response.aclose()
     return Response(
-        content=upstream_response.content,
+        content=content,
         status_code=upstream_response.status_code,
-        headers=_filter_response_headers(upstream_response.headers),
+        headers=response_headers,
         media_type=upstream_response.headers.get("content-type"),
     )
 
 
 @app.api_route("/api/rag", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 @app.api_route("/api/rag/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-async def proxy_rag(request: Request, path: str = "") -> Response:
+async def proxy_rag(
+    request: Request,
+    path: str = "",
+    _: str = Depends(require_auth),
+) -> Response:
     return await _proxy_request(request, UPSTREAMS["rag"], path)
 
 
@@ -154,7 +206,11 @@ async def proxy_rag(request: Request, path: str = "") -> Response:
     "/api/content/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
 )
-async def proxy_content(request: Request, path: str = "") -> Response:
+async def proxy_content(
+    request: Request,
+    path: str = "",
+    _: str = Depends(require_auth),
+) -> Response:
     return await _proxy_request(request, UPSTREAMS["content"], path)
 
 

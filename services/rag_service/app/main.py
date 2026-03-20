@@ -27,7 +27,7 @@ async def _close_resource(resource: object) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     embedding_model = SentenceTransformer(settings.embedder_model)
-    llm_http_client = httpx.AsyncClient(verify=False, timeout=None)
+    llm_http_client = httpx.AsyncClient(verify=False, timeout=120.0)
     llm_client = AsyncOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,

@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 import asyncio
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -77,23 +78,26 @@ async def generate_podcast(req: PodcastRequest) -> PodcastResponse:
         temp_files.append(path)
         tasks.append(_tts(line["text"], voice, path))
 
-    await asyncio.gather(*tasks)
+    try:
+        await asyncio.gather(*tasks)
 
-    # Шаг 3 — склеиваем аудио в один файл
-    combined = AudioSegment.empty()
-    pause = AudioSegment.silent(duration=500)
+        # Шаг 3 — склеиваем аудио в один файл
+        combined = AudioSegment.empty()
+        pause = AudioSegment.silent(duration=500)
 
-    for path in temp_files:
-        segment = AudioSegment.from_mp3(path)
-        combined += segment + pause
+        for path in temp_files:
+            segment = AudioSegment.from_mp3(path)
+            combined += segment + pause
 
-    output_filename = f"{session_id}.mp3"
-    output_path = os.path.join(settings.audio_dir, output_filename)
-    combined.export(output_path, format="mp3")
-
-    # Удаляем временные файлы
-    for path in temp_files:
-        os.remove(path)
+        output_filename = f"{session_id}.mp3"
+        output_path = os.path.join(settings.audio_dir, output_filename)
+        combined.export(output_path, format="mp3")
+    finally:
+        for path in temp_files:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
     return PodcastResponse(
         audio_url=f"/audio/{output_filename}",
@@ -103,7 +107,10 @@ async def generate_podcast(req: PodcastRequest) -> PodcastResponse:
 
 @router.get("/audio/{filename}")
 async def get_audio(filename: str):
-    path = os.path.join(settings.audio_dir, filename)
-    if not os.path.exists(path):
+    audio_dir = Path(settings.audio_dir).resolve()
+    file_path = (audio_dir / filename).resolve()
+    if not str(file_path).startswith(str(audio_dir) + os.sep) and file_path != audio_dir:
+        raise HTTPException(status_code=400, detail="Недопустимое имя файла")
+    if not file_path.exists():
         raise HTTPException(status_code=404, detail="Файл не найден")
-    return FileResponse(path, media_type="audio/mpeg")
+    return FileResponse(str(file_path), media_type="audio/mpeg")

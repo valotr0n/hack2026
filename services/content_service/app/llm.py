@@ -5,7 +5,7 @@ from .config import settings
 client = AsyncOpenAI(
     base_url=settings.llm_base_url,
     api_key=settings.llm_api_key,
-    http_client=httpx.AsyncClient(verify=False),
+    http_client=httpx.AsyncClient(verify=False, timeout=120.0),
 )
 
 
