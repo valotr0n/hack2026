@@ -1,0 +1,109 @@
+services:
+  rag_service:
+    build:
+      context: ./services/rag_service
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: rag_service
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      CHROMA_PERSIST_DIR: ${CHROMA_PERSIST_DIR}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data/chroma:${CHROMA_PERSIST_DIR}
+    networks:
+      - ai-platform
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  content_service:
+    build:
+      context: ./services/content_service
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: content_service
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      TTS_MODEL_PATH: ${TTS_MODEL_PATH}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8002:8002"
+    networks:
+      - ai-platform
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./services/gateway
+    env_file:
+      - .env
+    environment:
+      RAG_SERVICE_URL: http://rag_service:8001
+      CONTENT_SERVICE_URL: http://content_service:8002
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      TLS_CERT_FILE: ${TLS_CERT_FILE}
+      TLS_KEY_FILE: ${TLS_KEY_FILE}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      rag_service:
+        condition: service_healthy
+      content_service:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+      - "443:443"
+    volumes:
+      - ./certs:/app/certs:ro
+    networks:
+      - ai-platform
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  ai-platform:
+    name: ai-platform
+    driver: bridge
