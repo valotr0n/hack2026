@@ -10,8 +10,6 @@ services:
       LLM_API_KEY: ${LLM_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       CHROMA_PERSIST_DIR: ${CHROMA_PERSIST_DIR}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
     volumes:
@@ -42,9 +40,8 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_API_KEY: ${LLM_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
-      TTS_MODEL_PATH: ${TTS_MODEL_PATH}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      TTS_PROVIDER: ${TTS_PROVIDER}
+      TTS_VOICE: ${TTS_VOICE}
     ports:
       - "8002:8002"
     networks:
@@ -75,8 +72,6 @@ services:
       TLS_CERT_FILE: ${TLS_CERT_FILE}
       TLS_KEY_FILE: ${TLS_KEY_FILE}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       rag_service:
         condition: service_healthy
