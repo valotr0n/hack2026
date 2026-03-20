@@ -1,2 +1,10 @@
 fastapi==0.115.13
 uvicorn[standard]==0.34.0
+httpx
+openai
+llama-index-core
+pypdf
+python-docx
+python-multipart
+pydantic-settings
+sentence-transformers

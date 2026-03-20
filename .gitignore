@@ -1,4 +1,6 @@
 .env
+services/rag_service/.env
+env_rag/
 __pycache__/
 *.pyc
 *.pyo
