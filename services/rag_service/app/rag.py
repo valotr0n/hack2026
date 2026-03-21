@@ -369,6 +369,42 @@ async def create_document_collection(
     return collection_id
 
 
+async def get_source_content(notebook_id: str, source_id: str) -> dict[str, Any]:
+    """Возвращает текст чанков конкретного source_id внутри коллекции ноутбука."""
+    all_points: list[dict[str, Any]] = []
+    offset: Any = None
+
+    while True:
+        body: dict[str, Any] = {
+            "limit": 1000,
+            "with_payload": True,
+            "with_vector": False,
+            "filter": {"must": [{"key": "source_id", "match": {"value": source_id}}]},
+        }
+        if offset is not None:
+            body["offset"] = offset
+
+        result = await _qdrant_request(
+            "POST",
+            f"/collections/{notebook_id}/points/scroll",
+            body,
+        )
+        result_data = result.get("result") or {}
+        all_points.extend(result_data.get("points") or [])
+        offset = result_data.get("next_page_offset")
+        if offset is None:
+            break
+
+    all_points.sort(key=lambda p: p.get("payload", {}).get("chunk_index", 0))
+    texts = [
+        p["payload"]["text"]
+        for p in all_points
+        if p.get("payload", {}).get("text", "").strip()
+    ]
+    filename = all_points[0]["payload"].get("source", "") if all_points else ""
+    return {"text": "\n\n".join(texts), "filename": filename}
+
+
 async def delete_source_chunks(collection_id: str, source_id: str) -> None:
     await _qdrant_request(
         "POST",

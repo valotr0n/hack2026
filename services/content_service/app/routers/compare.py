@@ -16,16 +16,18 @@ class CompareRequest(BaseModel):
 
 
 class CompareChange(BaseModel):
-    section: str    # к какому разделу/пункту относится
-    type: str       # added | removed | modified | conflict
-    description: str
-    severity: str   # critical | warning | info
+    section: str      # раздел/пункт договора
+    type: str         # added | removed | modified | conflict
+    description: str  # что изменилось
+    quote_a: str = "" # цитата из оригинала (было)
+    quote_b: str = "" # цитата из новой версии (стало)
+    severity: str     # critical | warning | info
 
 
 class CompareResponse(BaseModel):
     changes: list[CompareChange]
-    summary: str           # 2-3 предложения о главных расхождениях
-    risk_level: str        # high | medium | low — насколько критичны различия
+    summary: str
+    risk_level: str   # high | medium | low
 
 
 @router.post(
@@ -33,8 +35,7 @@ class CompareResponse(BaseModel):
     response_model=CompareResponse,
     summary="Сравнение двух документов",
     description="""
-Сравнивает два документа и возвращает список расхождений: что добавили, убрали, изменили,
-и есть ли противоречия между документами.
+Сравнивает два документа и возвращает список расхождений с цитатами из оригиналов.
 
 **Типы изменений:** `added` · `removed` · `modified` · `conflict`
 **Severity:** `critical` · `warning` · `info`
@@ -46,17 +47,13 @@ class CompareResponse(BaseModel):
     {
       "section": "п. 3.1 Процентная ставка",
       "type": "modified",
-      "description": "Ставка изменена с 12% до 14% годовых",
+      "description": "Ставка повышена",
+      "quote_a": "процентная ставка составляет 12% годовых",
+      "quote_b": "процентная ставка составляет 14% годовых",
       "severity": "critical"
-    },
-    {
-      "section": "п. 7. Досрочное погашение",
-      "type": "removed",
-      "description": "Условие о досрочном погашении без штрафа удалено",
-      "severity": "warning"
     }
   ],
-  "summary": "Новая версия договора содержит повышение ставки и ужесточение штрафных условий...",
+  "summary": "Новая версия договора содержит повышение ставки...",
   "risk_level": "high"
 }
 ```
@@ -66,6 +63,8 @@ async def compare_documents(req: CompareRequest) -> CompareResponse:
     system = (
         "Ты — опытный юридический аналитик банка. "
         "Сравниваешь два документа и находишь все расхождения. "
+        "Для каждого изменения обязательно приводи точные цитаты из обоих документов — "
+        "дословно как написано в тексте, без додумывания. "
         "Особое внимание — на изменения в финансовых условиях, сроках и штрафах. "
         "Отвечай строго в формате JSON без лишнего текста."
     )
@@ -74,9 +73,12 @@ async def compare_documents(req: CompareRequest) -> CompareResponse:
         f"=== {req.label_a} ===\n{req.text_a}\n\n"
         f"=== {req.label_b} ===\n{req.text_b}\n\n"
         "Верни JSON:\n"
-        '{"changes": [{"section": "раздел/пункт", '
+        '{"changes": [{'
+        '"section": "номер пункта или раздел", '
         '"type": "added|removed|modified|conflict", '
-        '"description": "что изменилось — конкретно", '
+        '"description": "суть изменения — конкретно что изменилось", '
+        '"quote_a": "дословная цитата из первого документа или пустая строка если добавлено", '
+        '"quote_b": "дословная цитата из второго документа или пустая строка если удалено", '
         '"severity": "critical|warning|info"}], '
         '"summary": "2-3 предложения о главных расхождениях", '
         '"risk_level": "high|medium|low"}\n\n'
@@ -84,11 +86,12 @@ async def compare_documents(req: CompareRequest) -> CompareResponse:
         "- `critical` — изменения в деньгах, сроках, штрафах, правах сторон\n"
         "- `warning` — изменения в процедурах, условиях расторжения\n"
         "- `info` — технические и редакционные правки\n"
+        "- quote_a и quote_b — точные цитаты из текста, не перефраз\n"
         "- Если документы идентичны — верни пустой список изменений\n"
-        "- Описание должно содержать конкретные значения (было → стало)"
+        "- Описание должно содержать конкретные значения: было → стало"
     )
 
-    raw = await chat(system=system, user=user)
+    raw = await chat(system=system, user=user, temperature=0.1)
 
     try:
         start = raw.find("{")

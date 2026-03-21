@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from ..rag import delete_collection, delete_source_chunks, get_notebook_content
+from ..rag import delete_collection, delete_source_chunks, get_notebook_content, get_source_content
 
 router = APIRouter(tags=["notebooks"])
 
@@ -20,6 +20,17 @@ async def get_content(notebook_id: str) -> NotebookContentResponse:
             detail="Коллекция пуста или не найдена",
         )
     return NotebookContentResponse(**content)
+
+
+@router.get("/notebook/{notebook_id}/sources/{source_id}/content")
+async def get_source_text(notebook_id: str, source_id: str) -> dict:
+    content = await get_source_content(notebook_id, source_id)
+    if not content["text"].strip():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Источник не найден или пуст",
+        )
+    return content
 
 
 @router.delete("/collection/{collection_id}/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

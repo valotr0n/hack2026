@@ -1276,6 +1276,74 @@ async def compare_notebooks(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
+class SourceCompareRequest(BaseModel):
+    source_ids: list[str] = Field(min_length=2, max_length=2)
+
+
+@router.post(
+    "/{notebook_id}/sources/compare",
+    summary="Сравнить два файла внутри блокнота",
+    description="""
+Сравнивает два источника из одного блокнота. Удобно для случая «оригинал vs изменённая версия»
+без создания отдельных блокнотов.
+
+**Тело запроса:** `{"source_ids": ["id_первого", "id_второго"]}`
+
+Возвращает список изменений с цитатами из обоих документов.
+    """,
+)
+async def compare_sources(
+    notebook_id: str,
+    req: SourceCompareRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    notebook = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    src_a = await get_source(settings.db_path, req.source_ids[0])
+    src_b = await get_source(settings.db_path, req.source_ids[1])
+    for src in (src_a, src_b):
+        if not src or src["notebook_id"] != notebook_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Источник не найден")
+
+    async def _source_text(source_id: str) -> str:
+        try:
+            resp = await client.get(_rag(f"/notebook/{notebook_id}/sources/{source_id}/content"))
+            resp.raise_for_status()
+            return resp.json().get("text", "")
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    import asyncio as _asyncio
+    text_a, text_b = await _asyncio.gather(_source_text(req.source_ids[0]), _source_text(req.source_ids[1]))
+
+    if not text_a.strip() or not text_b.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Один из источников пуст")
+
+    try:
+        resp = await client.post(
+            _content("/compare"),
+            json={
+                "text_a": text_a[:_MAX_TEXT_LENGTH],
+                "text_b": text_b[:_MAX_TEXT_LENGTH],
+                "label_a": src_a["filename"],
+                "label_b": src_b["filename"],
+            },
+            headers=_contour_headers(notebook),
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        data["label_a"] = src_a["filename"]
+        data["label_b"] = src_b["filename"]
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
 @router.post(
     "/{notebook_id}/presentation/preview",
     summary="Структура презентации (превью)",
