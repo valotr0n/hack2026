@@ -105,6 +105,49 @@ def _extract_text_from_xlsx(payload: bytes) -> str:
     return "\n\n".join(sheets_text)
 
 
+def _normalize_pdf_text(text: str) -> str:
+    """Убирает типовые артефакты browser-to-PDF печати."""
+    cleaned_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            cleaned_lines.append("")
+            continue
+
+        if line.startswith(("file://", "http://", "https://")):
+            continue
+
+        if re.fullmatch(r"\d+/\d+", line):
+            continue
+
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+def build_upload_preview(full_text: str, limit: int = 500) -> str:
+    """Делает preview так, чтобы визуальный блок не терялся за длинным текстом."""
+    normalized = full_text.strip()
+    if len(normalized) <= limit:
+        return normalized
+
+    visual_marker = "--- Визуальные элементы документа ---"
+    if visual_marker not in normalized:
+        return normalized[:limit]
+
+    text_part, visual_part = normalized.split(visual_marker, 1)
+    visual_preview = f"{visual_marker}{visual_part}".strip()
+    if len(visual_preview) >= limit:
+        return visual_preview[:limit]
+
+    remaining = limit - len(visual_preview)
+    text_preview = text_part.strip()[:remaining].strip()
+    if not text_preview:
+        return visual_preview
+
+    return f"{visual_preview}\n\n{text_preview}".strip()[:limit]
+
+
 async def extract_text_from_upload(file: UploadFile) -> str:
     from .vision import extract_image_descriptions
 
@@ -115,6 +158,7 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     if suffix == ".pdf":
         reader = PdfReader(BytesIO(payload))
         text = "\n".join((page.extract_text() or "").strip() for page in reader.pages)
+        text = _normalize_pdf_text(text)
     elif suffix == ".docx":
         document = DocxDocument(BytesIO(payload))
         text = "\n".join(paragraph.text.strip() for paragraph in document.paragraphs)

@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 
 from ..dependencies import get_embedding_model
 from ..rag import (
+    build_upload_preview,
     create_document_collection,
     extract_text_from_upload,
     fetch_embeddings,
@@ -39,4 +40,9 @@ async def upload_document(
         notebook_id=notebook_id,
         source_id=source_id,
     )
-    return UploadResponse(doc_id=collection_id, chunks=len(chunks), source_id=source_id, preview=full_text[:500])
+    return UploadResponse(
+        doc_id=collection_id,
+        chunks=len(chunks),
+        source_id=source_id,
+        preview=build_upload_preview(full_text),
+    )

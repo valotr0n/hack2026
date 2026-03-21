@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 _processor = None
 _model = None
+_load_error: str | None = None
 _lock = asyncio.Lock()
 
 _DESCRIBE_PROMPT = (
@@ -34,11 +35,19 @@ def _load_vision_model(model_id: str) -> None:
 
 
 async def _get_vision_model(model_id: str):
-    global _model, _processor
+    global _model, _processor, _load_error
+    if _load_error is not None:
+        raise RuntimeError(_load_error)
+
     if _model is None:
         async with _lock:
             if _model is None:
-                await asyncio.to_thread(_load_vision_model, model_id)
+                try:
+                    await asyncio.to_thread(_load_vision_model, model_id)
+                except Exception as exc:
+                    _load_error = f"Unable to load vision model {model_id}: {exc}"
+                    logger.warning(_load_error)
+                    raise RuntimeError(_load_error) from exc
     return _processor, _model
 
 
@@ -84,7 +93,7 @@ async def _describe_image(image_bytes: bytes, model_id: str) -> str:
         await _get_vision_model(model_id)
         return await asyncio.to_thread(_describe_sync, image_bytes)
     except Exception as exc:
-        logger.warning("Vision model failed: %s", exc)
+        logger.warning("Vision model failed while describing image: %s", exc)
         return ""
 
 
@@ -132,5 +141,11 @@ async def extract_image_descriptions(payload: bytes, suffix: str, model_id: str)
         desc = await _describe_image(img_bytes, model_id)
         if desc:
             descriptions.append(f"[Изображение {i}]: {desc}")
+
+    if not descriptions:
+        logger.warning(
+            "Found %d image(s) in document, but vision descriptions were not produced.",
+            len(image_bytes_list),
+        )
 
     return descriptions
