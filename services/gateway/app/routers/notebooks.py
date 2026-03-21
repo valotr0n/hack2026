@@ -22,6 +22,7 @@ from ..database import (
     list_notebooks,
     list_sources,
     save_notebook_content,
+    update_notebook_contour,
     update_notebook_title,
 )
 
@@ -54,10 +55,9 @@ def _content(path: str) -> str:
     return f"{settings.content_service_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _contour_headers(request: Request) -> dict[str, str]:
-    """Пробрасывает X-Contour из запроса клиента в content_service."""
-    contour = request.headers.get("x-contour", "open")
-    return {"x-contour": contour if contour in ("open", "closed") else "open"}
+def _contour_headers(notebook: dict) -> dict[str, str]:
+    """Передаёт контур блокнота в content_service."""
+    return {"x-contour": notebook.get("contour", "open")}
 
 
 async def _owned_notebook(notebook_id: str, user_id: str) -> dict[str, Any]:
@@ -94,6 +94,11 @@ async def _notebook_text(client: httpx.AsyncClient, notebook_id: str) -> str:
 
 class CreateNotebookRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+    contour: str = "open"  # open | closed
+
+
+class ContourRequest(BaseModel):
+    contour: str  # open | closed
 
 
 class UpdateNotebookRequest(BaseModel):
@@ -111,6 +116,7 @@ class NotebookResponse(BaseModel):
     id: str
     title: str
     created_at: str
+    contour: str = "open"
     sources: list[SourceResponse] = []
     summary: str | None = None
     mindmap: dict | None = None
@@ -183,7 +189,7 @@ async def create(
     req: CreateNotebookRequest,
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
-    notebook = await create_notebook(settings.db_path, user_id, req.title)
+    notebook = await create_notebook(settings.db_path, user_id, req.title, req.contour)
     return NotebookResponse(**notebook)
 
 
@@ -235,6 +241,31 @@ async def update(
     return NotebookResponse(**notebook, sources=sources)
 
 
+@router.patch(
+    "/{notebook_id}/contour",
+    response_model=NotebookResponse,
+    summary="Переключить контур блокнота",
+    description="""
+Переключает блокнот между открытым и закрытым контуром обработки данных.
+
+- `open` — данные обрабатываются через внешний API (быстро, качественно)
+- `closed` — все запросы идут через локальные модели (ollama + whisper), данные не покидают сервер
+
+Настройка применяется ко всем последующим генерациям в этом блокноте.
+    """,
+)
+async def set_contour(
+    notebook_id: str,
+    req: ContourRequest,
+    user_id: str = Depends(require_auth),
+) -> NotebookResponse:
+    notebook = await _owned_notebook(notebook_id, user_id)
+    await update_notebook_contour(settings.db_path, notebook_id, req.contour)
+    notebook = _parse_notebook(await get_notebook(settings.db_path, notebook_id))
+    sources = await list_sources(settings.db_path, notebook_id)
+    return NotebookResponse(**notebook, sources=sources)
+
+
 @router.delete(
     "/{notebook_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -246,7 +277,7 @@ async def delete(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> None:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     # Удаляем коллекцию Qdrant (best-effort)
     try:
@@ -270,7 +301,7 @@ async def upload_source(
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
     file_content = await file.read()
@@ -317,7 +348,7 @@ async def transcribe_source(
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
     file_content = await file.read()
@@ -373,7 +404,7 @@ async def remove_source(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> None:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     source = await get_source(settings.db_path, source_id)
     if not source or source["notebook_id"] != notebook_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Источник не найден")
@@ -419,7 +450,7 @@ async def chat(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> StreamingResponse:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
     try:
@@ -475,12 +506,12 @@ async def summary(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/summary"), json={"text": text, "style": req.style}, headers=_contour_headers(request))
+        resp = await client.post(_content("/summary"), json={"text": text, "style": req.style}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "summary", data.get("summary", ""))
@@ -517,12 +548,12 @@ async def mindmap(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(request))
+        resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "mindmap", _json.dumps(data, ensure_ascii=False))
@@ -556,12 +587,12 @@ async def flashcards(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(request))
+        resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "flashcards", _json.dumps(data.get("flashcards", []), ensure_ascii=False))
@@ -595,12 +626,12 @@ async def podcast(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(request))
+        resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         # Переписываем URL чтобы аудио шло через gateway, а не напрямую на content_service:8002
@@ -641,12 +672,12 @@ async def contract(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(request))
+        resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "contract", _json.dumps(data, ensure_ascii=False))
@@ -681,12 +712,12 @@ async def knowledge_graph(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(request))
+        resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "knowledge_graph", _json.dumps(data, ensure_ascii=False))
@@ -727,7 +758,7 @@ async def check_flashcard(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
     try:
@@ -738,7 +769,7 @@ async def check_flashcard(
                 "correct_answer": req.correct_answer,
                 "user_answer": req.user_answer,
             },
-            headers=_contour_headers(request),
+            headers=_contour_headers(notebook),
         )
         resp.raise_for_status()
         return resp.json()
@@ -779,16 +810,20 @@ async def multi_search(
 
     texts: list[str] = []
     titles: list[str] = []
+    contours: list[str] = []
 
     for nb_id in req.notebook_ids:
         nb = await _owned_notebook(nb_id, user_id)
         titles.append(nb["title"])
+        contours.append(nb.get("contour", "open"))
         try:
             text = await _notebook_text(client, nb_id)
             texts.append(f"[Блокнот: {nb['title']}]\n{text}")
         except HTTPException:
             texts.append(f"[Блокнот: {nb['title']}]\n(документы не загружены)")
 
+    # Наиболее закрытый контур из всех блокнотов
+    contour = "closed" if "closed" in contours else "open"
     combined = "\n\n---\n\n".join(texts)
     if len(combined) > _MAX_TEXT_LENGTH:
         combined = combined[:_MAX_TEXT_LENGTH].rsplit(" ", 1)[0]
@@ -797,7 +832,7 @@ async def multi_search(
         resp = await client.post(
             _content("/answer"),
             json={"text": combined, "question": req.query},
-            headers=_contour_headers(request),
+            headers={"x-contour": contour},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -833,12 +868,12 @@ async def timeline(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(request))
+        resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
@@ -886,12 +921,12 @@ async def generate_questions(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(request))
+        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
@@ -939,6 +974,8 @@ async def compare_notebooks(
 ) -> dict[str, Any]:
     nb_a = await _owned_notebook(req.notebook_ids[0], user_id)
     nb_b = await _owned_notebook(req.notebook_ids[1], user_id)
+    # Используем наиболее закрытый контур из двух блокнотов
+    contour = "closed" if "closed" in (nb_a.get("contour", "open"), nb_b.get("contour", "open")) else "open"
     client: httpx.AsyncClient = request.app.state.http_client
 
     text_a = await _notebook_text(client, req.notebook_ids[0])
@@ -953,7 +990,7 @@ async def compare_notebooks(
                 "label_a": nb_a["title"],
                 "label_b": nb_b["title"],
             },
-            headers=_contour_headers(request),
+            headers={"x-contour": contour},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -990,15 +1027,15 @@ async def presentation_preview(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    nb = await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
         resp = await client.post(
             _content("/presentation/preview"),
-            json={"text": text, "title": req.title or nb["title"], "style": req.style},
-            headers=_contour_headers(request),
+            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            headers=_contour_headers(notebook),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -1026,15 +1063,15 @@ async def presentation_download(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> StreamingResponse:
-    nb = await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
     try:
         resp = await client.post(
             _content("/presentation/download"),
-            json={"text": text, "title": req.title or nb["title"], "style": req.style},
-            headers=_contour_headers(request),
+            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            headers=_contour_headers(notebook),
             timeout=120.0,
         )
         resp.raise_for_status()

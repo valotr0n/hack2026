@@ -52,6 +52,7 @@ async def init_db(path: str) -> None:
             ("timeline", "TEXT"),
             ("questions", "TEXT"),
             ("presentation", "TEXT"),
+            ("contour", "TEXT DEFAULT 'open'"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE notebooks ADD COLUMN {col} {typedef}")
@@ -106,16 +107,27 @@ async def get_user_by_id(path: str, user_id: str) -> dict[str, Any] | None:
 
 # ── Notebooks ─────────────────────────────────────────────────────────────────
 
-async def create_notebook(path: str, user_id: str, title: str) -> dict[str, Any]:
+async def create_notebook(path: str, user_id: str, title: str, contour: str = "open") -> dict[str, Any]:
     nid = _new_id()
     now = _now()
+    contour = contour if contour in ("open", "closed") else "open"
     async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
-            "INSERT INTO notebooks (id, user_id, title, created_at) VALUES (?, ?, ?, ?)",
-            (nid, user_id, title, now),
+            "INSERT INTO notebooks (id, user_id, title, created_at, contour) VALUES (?, ?, ?, ?, ?)",
+            (nid, user_id, title, now, contour),
         )
         await db.commit()
-    return {"id": nid, "user_id": user_id, "title": title, "created_at": now}
+    return {"id": nid, "user_id": user_id, "title": title, "created_at": now, "contour": contour}
+
+
+async def update_notebook_contour(path: str, notebook_id: str, contour: str) -> None:
+    contour = contour if contour in ("open", "closed") else "open"
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute(
+            "UPDATE notebooks SET contour = ? WHERE id = ?",
+            (contour, notebook_id),
+        )
+        await db.commit()
 
 
 async def list_notebooks(path: str, user_id: str) -> list[dict[str, Any]]:
@@ -132,7 +144,7 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions, presentation FROM notebooks WHERE id = ?",
+            "SELECT id, user_id, title, created_at, contour, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions, presentation FROM notebooks WHERE id = ?",
             (notebook_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -227,7 +239,8 @@ async def clear_notebook_cache(path: str, notebook_id: str) -> None:
                podcast_url = NULL, podcast_script = NULL,
                contract = NULL, knowledge_graph = NULL,
                timeline = NULL, questions = NULL, presentation = NULL
-               WHERE id = ?""",
+               WHERE id = ?
+            """,
             (notebook_id,),
         )
         await db.commit()
