@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS sources (
     chunks_count INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id          TEXT PRIMARY KEY,
+    notebook_id TEXT NOT NULL REFERENCES notebooks(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    sources     TEXT NOT NULL DEFAULT '[]',
+    created_at  TEXT NOT NULL
+);
 """
 
 
@@ -256,6 +265,52 @@ async def get_source(path: str, source_id: str) -> dict[str, Any] | None:
 async def delete_source(path: str, source_id: str) -> None:
     async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        await db.commit()
+
+
+async def save_chat_message(
+    path: str,
+    notebook_id: str,
+    role: str,
+    content: str,
+    sources: list[str] | None = None,
+) -> dict[str, Any]:
+    import json
+    mid = _new_id()
+    now = _now()
+    sources_json = json.dumps(sources or [], ensure_ascii=False)
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute(
+            "INSERT INTO chat_messages (id, notebook_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, notebook_id, role, content, sources_json, now),
+        )
+        await db.commit()
+    return {"id": mid, "notebook_id": notebook_id, "role": role, "content": content, "sources": sources or [], "created_at": now}
+
+
+async def get_chat_history(path: str, notebook_id: str) -> list[dict[str, Any]]:
+    import json
+    async with aiosqlite.connect(path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, role, content, sources, created_at FROM chat_messages WHERE notebook_id = ? ORDER BY created_at ASC",
+            (notebook_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["sources"] = json.loads(d["sources"])
+        except Exception:
+            d["sources"] = []
+        result.append(d)
+    return result
+
+
+async def clear_chat_history(path: str, notebook_id: str) -> None:
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute("DELETE FROM chat_messages WHERE notebook_id = ?", (notebook_id,))
         await db.commit()
 
 
