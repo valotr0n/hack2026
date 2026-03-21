@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ..auth import create_access_token, hash_password, require_auth
+from ..auth import create_access_token, hash_password, verify_password, require_auth
 from ..config import settings
 from ..database import create_user, get_user_by_id, get_user_by_username
 
@@ -56,7 +56,7 @@ async def register(req: RegisterRequest) -> UserResponse:
 )
 async def login(req: LoginRequest) -> TokenResponse:
     user = await get_user_by_username(settings.db_path, req.username)
-    if not user or user["password_hash"] != hash_password(req.password):
+    if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный логин или пароль",

@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS sources (
 async def init_db(path: str) -> None:
     import os
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout = 10000")
         await db.executescript(_SCHEMA)
         # Миграции — добавляем колонки для кэша контента если их ещё нет
         for col, typedef in [
@@ -71,7 +72,7 @@ def _new_id() -> str:
 async def create_user(path: str, username: str, password_hash: str) -> dict[str, Any]:
     uid = _new_id()
     now = _now()
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
             "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
             (uid, username, password_hash, now),
@@ -81,7 +82,7 @@ async def create_user(path: str, username: str, password_hash: str) -> dict[str,
 
 
 async def get_user_by_username(path: str, username: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, username, password_hash, created_at FROM users WHERE username = ?",
@@ -92,7 +93,7 @@ async def get_user_by_username(path: str, username: str) -> dict[str, Any] | Non
 
 
 async def get_user_by_id(path: str, user_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, username, created_at FROM users WHERE id = ?",
@@ -107,7 +108,7 @@ async def get_user_by_id(path: str, user_id: str) -> dict[str, Any] | None:
 async def create_notebook(path: str, user_id: str, title: str) -> dict[str, Any]:
     nid = _new_id()
     now = _now()
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
             "INSERT INTO notebooks (id, user_id, title, created_at) VALUES (?, ?, ?, ?)",
             (nid, user_id, title, now),
@@ -117,7 +118,7 @@ async def create_notebook(path: str, user_id: str, title: str) -> dict[str, Any]
 
 
 async def list_notebooks(path: str, user_id: str) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, title, created_at FROM notebooks WHERE user_id = ? ORDER BY created_at DESC",
@@ -127,7 +128,7 @@ async def list_notebooks(path: str, user_id: str) -> list[dict[str, Any]]:
 
 
 async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions FROM notebooks WHERE id = ?",
@@ -141,7 +142,7 @@ async def save_notebook_content(path: str, notebook_id: str, field: str, value: 
     allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script", "contract", "knowledge_graph", "timeline", "questions"}
     if field not in allowed:
         raise ValueError(f"Unknown field: {field}")
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
             f"UPDATE notebooks SET {field} = ? WHERE id = ?",
             (value, notebook_id),
@@ -150,7 +151,7 @@ async def save_notebook_content(path: str, notebook_id: str, field: str, value: 
 
 
 async def update_notebook_title(path: str, notebook_id: str, title: str) -> None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
             "UPDATE notebooks SET title = ? WHERE id = ?",
             (title, notebook_id),
@@ -159,7 +160,7 @@ async def update_notebook_title(path: str, notebook_id: str, title: str) -> None
 
 
 async def delete_notebook(path: str, notebook_id: str) -> None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute("DELETE FROM notebooks WHERE id = ?", (notebook_id,))
         await db.commit()
 
@@ -174,7 +175,7 @@ async def create_source(
 ) -> dict[str, Any]:
     sid = _new_id()
     now = _now()
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
             "INSERT INTO sources (id, notebook_id, filename, chunks_count, created_at) VALUES (?, ?, ?, ?, ?)",
             (sid, notebook_id, filename, chunks_count, now),
@@ -190,7 +191,7 @@ async def create_source(
 
 
 async def list_sources(path: str, notebook_id: str) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, filename, chunks_count, created_at FROM sources WHERE notebook_id = ? ORDER BY created_at ASC",
@@ -200,7 +201,7 @@ async def list_sources(path: str, notebook_id: str) -> list[dict[str, Any]]:
 
 
 async def get_source(path: str, source_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, notebook_id, filename, chunks_count, created_at FROM sources WHERE id = ?",
@@ -211,6 +212,21 @@ async def get_source(path: str, source_id: str) -> dict[str, Any] | None:
 
 
 async def delete_source(path: str, source_id: str) -> None:
-    async with aiosqlite.connect(path) as db:
+    async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        await db.commit()
+
+
+async def clear_notebook_cache(path: str, notebook_id: str) -> None:
+    """Сбрасывает весь кэш сгенерированного контента блокнота."""
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute(
+            """UPDATE notebooks SET
+               summary = NULL, mindmap = NULL, flashcards = NULL,
+               podcast_url = NULL, podcast_script = NULL,
+               contract = NULL, knowledge_graph = NULL,
+               timeline = NULL, questions = NULL
+               WHERE id = ?""",
+            (notebook_id,),
+        )
         await db.commit()
