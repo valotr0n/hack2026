@@ -33,7 +33,7 @@ import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
-    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline"):
+    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline", "questions"):
         raw = nb.get(field)
         if isinstance(raw, str):
             try:
@@ -113,6 +113,7 @@ class NotebookResponse(BaseModel):
     contract: dict | None = None
     knowledge_graph: dict | None = None
     timeline: dict | None = None
+    questions: dict | None = None
 
 
 class ChatMessage(BaseModel):
@@ -146,6 +147,10 @@ class QuizCheckRequest(BaseModel):
 class MultiSearchRequest(BaseModel):
     notebook_ids: list[str] = Field(min_length=1, max_length=10)
     query: str
+
+
+class QuestionsRequest(BaseModel):
+    context: str = "general"  # general | credit | legal | financial
 
 
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
@@ -810,6 +815,59 @@ async def timeline(
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/questions",
+    summary="Вопросы к документу",
+    description="""
+Анализирует документы блокнота и генерирует список вопросов, на которые они **не дают ответа**.
+Помогает аналитику понять, какую информацию нужно запросить дополнительно.
+
+**Параметр `context`** — роль, с позиции которой анализируется документ:
+- `general` — универсальный анализ (по умолчанию)
+- `credit` — кредитный аналитик банка
+- `legal` — юрист
+- `financial` — финансовый аналитик
+
+**Категории вопросов:**
+- `missing_info` — информация отсутствует
+- `clarification` — формулировка неясна
+- `risk` — требует уточнения из-за риска
+- `required_doc` — нужен дополнительный документ
+
+**Приоритеты:** `high` (блокирующие) · `medium` · `low`
+
+**Ответ:**
+```json
+{
+  "questions": [
+    {"question": "Кто является поручителем?", "category": "missing_info", "priority": "high"},
+    {"question": "Что значит 'существенное нарушение' в п. 4.2?", "category": "clarification", "priority": "medium"}
+  ],
+  "summary": "Документ не содержит информации о залоге и поручительстве..."
+}
+```
+    """,
+)
+async def generate_questions(
+    notebook_id: str,
+    req: QuestionsRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context})
+        resp.raise_for_status()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
         return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
