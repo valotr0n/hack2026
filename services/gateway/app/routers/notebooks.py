@@ -35,7 +35,6 @@ router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 # Максимальный объём текста для передачи в LLM (~20k символов ≈ 5k токенов)
 _MAX_TEXT_LENGTH = 20_000
 
-import asyncio
 import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
@@ -64,29 +63,6 @@ def _parse_source(src: dict) -> dict:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-async def _autotag_source_bg(
-    client: httpx.AsyncClient,
-    db_path: str,
-    source_id: str,
-    preview: str,
-    contour: str,
-) -> None:
-    """Фоновая задача: автотегирование источника по его тексту (preview)."""
-    if not preview.strip():
-        return
-    try:
-        tag_resp = await client.post(
-            _content("/autotag"),
-            json={"text": preview},
-            headers={"x-contour": contour},
-        )
-        tag_resp.raise_for_status()
-        data = tag_resp.json()
-        tags = data.get("tags", [])
-        await update_source_autotag(db_path, source_id, data.get("doc_type", "прочее"), tags)
-    except Exception:
-        pass  # best-effort, не блокируем ответ пользователю
 
 
 def _rag(path: str) -> str:
@@ -378,9 +354,23 @@ async def upload_source(
         status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
-    asyncio.create_task(_autotag_source_bg(
-        client, settings.db_path, source["id"], rag_data.get("preview", ""), notebook.get("contour", "open")
-    ))
+    preview = rag_data.get("preview", "")
+    if preview.strip():
+        try:
+            tag_resp = await client.post(
+                _content("/autotag"),
+                json={"text": preview},
+                headers={"x-contour": notebook.get("contour", "open")},
+            )
+            tag_resp.raise_for_status()
+            tag_data = tag_resp.json()
+            doc_type = tag_data.get("doc_type", "прочее")
+            tags = tag_data.get("tags", [])
+            await update_source_autotag(settings.db_path, source["id"], doc_type, tags)
+            source["doc_type"] = doc_type
+            source["tags"] = tags
+        except Exception:
+            pass  # best-effort, не роняем upload
     return source
 
 
@@ -446,9 +436,23 @@ async def transcribe_source(
         status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
-    asyncio.create_task(_autotag_source_bg(
-        client, settings.db_path, source["id"], text[:500], notebook.get("contour", "open")
-    ))
+    preview = text[:500]
+    if preview.strip():
+        try:
+            tag_resp = await client.post(
+                _content("/autotag"),
+                json={"text": preview},
+                headers={"x-contour": notebook.get("contour", "open")},
+            )
+            tag_resp.raise_for_status()
+            tag_data = tag_resp.json()
+            doc_type = tag_data.get("doc_type", "прочее")
+            tags = tag_data.get("tags", [])
+            await update_source_autotag(settings.db_path, source["id"], doc_type, tags)
+            source["doc_type"] = doc_type
+            source["tags"] = tags
+        except Exception:
+            pass
     return source
 
 
