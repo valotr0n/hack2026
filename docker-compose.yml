@@ -51,6 +51,8 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_API_KEY: ${LLM_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
+      STT_BASE_URL: ${STT_BASE_URL}
+      STT_API_KEY: ${STT_API_KEY}
       TTS_VOICE_ALEX: ${TTS_VOICE_ALEX}
       TTS_VOICE_MARIA: ${TTS_VOICE_MARIA}
       AUDIO_DIR: /app/audio

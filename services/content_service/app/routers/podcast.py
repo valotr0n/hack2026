@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import edge_tts
 from pydub import AudioSegment
 from ..llm import chat
 from ..config import settings
+from ..tts import SPEAKER_ALEX, SPEAKER_MARIA, synthesize
 
 router = APIRouter()
 
@@ -25,8 +25,7 @@ class PodcastResponse(BaseModel):
 
 
 async def _tts(text: str, voice: str, output_path: str) -> None:
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output_path)
+    await synthesize(text, voice, output_path)
 
 
 @router.post("/podcast", response_model=PodcastResponse)
@@ -69,11 +68,7 @@ async def generate_podcast(req: PodcastRequest) -> PodcastResponse:
 
     tasks = []
     for i, line in enumerate(script):
-        voice = (
-            settings.tts_voice_alex
-            if line["speaker"] == "Алекс"
-            else settings.tts_voice_maria
-        )
+        voice = SPEAKER_ALEX if line["speaker"] == "Алекс" else SPEAKER_MARIA
         path = os.path.join(settings.audio_dir, f"{session_id}_{i}.mp3")
         temp_files.append(path)
         tasks.append(_tts(line["text"], voice, path))

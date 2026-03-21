@@ -39,6 +39,18 @@ async def init_db(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     async with aiosqlite.connect(path) as db:
         await db.executescript(_SCHEMA)
+        # Миграции — добавляем колонки для кэша контента если их ещё нет
+        for col, typedef in [
+            ("summary", "TEXT"),
+            ("mindmap", "TEXT"),
+            ("flashcards", "TEXT"),
+            ("podcast_url", "TEXT"),
+            ("podcast_script", "TEXT"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE notebooks ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
         await db.commit()
 
 
@@ -114,11 +126,23 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, user_id, title, created_at FROM notebooks WHERE id = ?",
+            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script FROM notebooks WHERE id = ?",
             (notebook_id,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def save_notebook_content(path: str, notebook_id: str, field: str, value: str) -> None:
+    allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script"}
+    if field not in allowed:
+        raise ValueError(f"Unknown field: {field}")
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            f"UPDATE notebooks SET {field} = ? WHERE id = ?",
+            (value, notebook_id),
+        )
+        await db.commit()
 
 
 async def update_notebook_title(path: str, notebook_id: str, title: str) -> None:
