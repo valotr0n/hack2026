@@ -208,6 +208,10 @@ class PresentationRequest(BaseModel):
     style: str = "business"  # business | academic | popular
 
 
+class UrlSourceRequest(BaseModel):
+    url: str
+
+
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
 
 @router.post(
@@ -482,6 +486,154 @@ async def remove_source(
     await clear_notebook_cache(settings.db_path, notebook_id)
 
 
+# ── URL source ────────────────────────────────────────────────────────────────
+
+def _is_youtube(url: str) -> bool:
+    return "youtube.com/watch" in url or "youtu.be/" in url
+
+
+def _youtube_video_id(url: str) -> str:
+    import re
+    m = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", url)
+    if not m:
+        raise ValueError("Не удалось извлечь ID видео из URL")
+    return m.group(1)
+
+
+def _fetch_youtube_text(video_id: str) -> tuple[str, str]:
+    """Возвращает (текст транскрипции, название для filename)."""
+    from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["ru", "en"])
+    except NoTranscriptFound:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    except TranscriptsDisabled:
+        raise ValueError("Субтитры для этого видео отключены")
+    text = " ".join(entry["text"] for entry in transcript)
+    return text, f"youtube_{video_id}.txt"
+
+
+def _fetch_web_text(url: str) -> tuple[str, str]:
+    """Возвращает (текст страницы, название для filename)."""
+    import trafilatura
+    from urllib.parse import urlparse
+    html = trafilatura.fetch_url(url)
+    if not html:
+        raise ValueError("Не удалось загрузить страницу")
+    text = trafilatura.extract(html, include_comments=False, include_tables=True)
+    if not text:
+        raise ValueError("Не удалось извлечь текст со страницы")
+    domain = urlparse(url).netloc.replace("www.", "")
+    return text, f"{domain}.txt"
+
+
+@router.post(
+    "/{notebook_id}/sources/url",
+    status_code=status.HTTP_201_CREATED,
+    summary="Добавить источник по URL",
+    description="""
+Загружает контент по URL и добавляет его как источник в блокнот.
+
+**Поддерживаемые типы:**
+- Веб-страницы — извлекается основной текст (без рекламы и навигации)
+- YouTube — извлекаются субтитры/транскрипция видео
+- PDF по прямой ссылке — скачивается и парсится как обычный PDF
+
+**Пример запроса:**
+```json
+{"url": "https://youtube.com/watch?v=dQw4w9WgXcQ"}
+```
+    """,
+)
+async def upload_source_url(
+    notebook_id: str,
+    req: UrlSourceRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    import asyncio
+    notebook = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    url = req.url.strip()
+
+    # Определяем тип URL и извлекаем текст
+    if _is_youtube(url):
+        try:
+            video_id = _youtube_video_id(url)
+            text, filename = await asyncio.to_thread(_fetch_youtube_text, video_id)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    elif url.lower().endswith(".pdf"):
+        # PDF по прямой ссылке — скачиваем и отправляем в rag_service как файл
+        try:
+            pdf_resp = await client.get(url, follow_redirects=True, timeout=60.0)
+            pdf_resp.raise_for_status()
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Не удалось скачать PDF: {exc}")
+        from urllib.parse import urlparse
+        filename = urlparse(url).path.split("/")[-1] or "document.pdf"
+        try:
+            rag_resp = await client.post(
+                _rag("/upload"),
+                files={"file": (filename, io.BytesIO(pdf_resp.content), "application/pdf")},
+                data={"notebook_id": notebook_id},
+            )
+            rag_resp.raise_for_status()
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        rag_data = rag_resp.json()
+        source = await create_source(settings.db_path, notebook_id, filename, rag_data.get("chunks", 0), status="ready")
+        await clear_notebook_cache(settings.db_path, notebook_id)
+        preview = rag_data.get("preview", "")
+        if preview.strip():
+            try:
+                tag_resp = await client.post(_content("/autotag"), json={"text": preview}, headers={"x-contour": notebook.get("contour", "open")})
+                tag_resp.raise_for_status()
+                tag_data = tag_resp.json()
+                await update_source_autotag(settings.db_path, source["id"], tag_data.get("doc_type", "прочее"), tag_data.get("tags", []))
+                source["doc_type"] = tag_data.get("doc_type")
+                source["tags"] = tag_data.get("tags", [])
+            except Exception:
+                pass
+        return source
+    else:
+        try:
+            text, filename = await asyncio.to_thread(_fetch_web_text, url)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    # Для YouTube и веб-страниц — отправляем текст как TXT в rag_service
+    try:
+        rag_resp = await client.post(
+            _rag("/upload"),
+            files={"file": (filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
+            data={"notebook_id": notebook_id},
+        )
+        rag_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    rag_data = rag_resp.json()
+    source = await create_source(settings.db_path, notebook_id, filename, rag_data.get("chunks", 0), status="ready")
+    await clear_notebook_cache(settings.db_path, notebook_id)
+    preview = text[:500]
+    if preview.strip():
+        try:
+            tag_resp = await client.post(_content("/autotag"), json={"text": preview}, headers={"x-contour": notebook.get("contour", "open")})
+            tag_resp.raise_for_status()
+            tag_data = tag_resp.json()
+            await update_source_autotag(settings.db_path, source["id"], tag_data.get("doc_type", "прочее"), tag_data.get("tags", []))
+            source["doc_type"] = tag_data.get("doc_type")
+            source["tags"] = tag_data.get("tags", [])
+        except Exception:
+            pass
+    return source
+
+
 # ── Chat (SSE stream) ─────────────────────────────────────────────────────────
 
 @router.post(
@@ -536,6 +688,7 @@ async def chat(
 
     async def _stream():
         accumulated: list[str] = []
+        sources: list[str] = []
         try:
             async for chunk in rag_resp.aiter_bytes():
                 yield chunk
@@ -549,13 +702,15 @@ async def chat(
                         parsed = _json_mod.loads(data)
                         if delta := parsed.get("delta"):
                             accumulated.append(delta)
+                        if not sources and parsed.get("sources"):
+                            sources = parsed["sources"]
                     except Exception:
                         pass
         finally:
             await rag_resp.aclose()
             if accumulated:
                 await save_chat_message(
-                    settings.db_path, notebook_id, "assistant", "".join(accumulated)
+                    settings.db_path, notebook_id, "assistant", "".join(accumulated), sources
                 )
 
     return StreamingResponse(
