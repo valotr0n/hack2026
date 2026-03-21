@@ -35,11 +35,15 @@ services:
       TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-28}
       TORCH_NUM_INTEROP_THREADS: ${TORCH_NUM_INTEROP_THREADS:-4}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-128}
+      EMBEDDING_PRELOAD: ${EMBEDDING_PRELOAD:-true}
+      BLOCKING_MODEL_PRELOAD: ${BLOCKING_MODEL_PRELOAD:-true}
       VISION_ENABLED: ${VISION_ENABLED:-true}
       VISION_MODEL_ID: ${VISION_MODEL_ID:-AvitoTech/avision}
       VISION_PRELOAD: ${VISION_PRELOAD:-true}
       VISION_MAX_NEW_TOKENS: ${VISION_MAX_NEW_TOKENS:-64}
       VISION_MAX_IMAGE_SIDE: ${VISION_MAX_IMAGE_SIDE:-1024}
+      VISION_MIN_IMAGE_SIDE: ${VISION_MIN_IMAGE_SIDE:-180}
+      VISION_MAX_IMAGES_PER_DOCUMENT: ${VISION_MAX_IMAGES_PER_DOCUMENT:-6}
     ports:
       - "8001:8001"
     depends_on:
@@ -60,7 +64,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 240s
     restart: unless-stopped
 
   content_service:

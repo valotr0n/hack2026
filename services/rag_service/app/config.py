@@ -38,6 +38,19 @@ def _default_embedding_batch_size() -> int:
     return 32
 
 
+def _default_blocking_model_preload() -> bool:
+    return _available_cpus() >= 24
+
+
+def _default_vision_max_images_per_document() -> int:
+    cpus = _available_cpus()
+    if cpus >= 24:
+        return 6
+    if cpus >= 12:
+        return 4
+    return 3
+
+
 class Settings(BaseSettings):
     llm_base_url: str = "https://hackai.centrinvest.ru:6630/v1"
     llm_api_key: str = "hackaton2026"
@@ -47,11 +60,15 @@ class Settings(BaseSettings):
     torch_num_threads: int = _default_torch_threads()
     torch_num_interop_threads: int = _default_torch_interop_threads()
     embedding_batch_size: int = _default_embedding_batch_size()
+    embedding_preload: bool = True
+    blocking_model_preload: bool = _default_blocking_model_preload()
     vision_enabled: bool = True
     vision_model_id: str = "AvitoTech/avision"
     vision_preload: bool = True
     vision_max_new_tokens: int = 64
     vision_max_image_side: int = 1024
+    vision_min_image_side: int = 180
+    vision_max_images_per_document: int = _default_vision_max_images_per_document()
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

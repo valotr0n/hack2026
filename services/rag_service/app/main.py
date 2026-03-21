@@ -5,6 +5,7 @@ import inspect
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
+from time import perf_counter
 
 import httpx
 from fastapi import FastAPI
@@ -50,6 +51,18 @@ def _configure_cpu_runtime() -> None:
     )
 
 
+def _warmup_embedding_model(embedding_model: SentenceTransformer) -> None:
+    started_at = perf_counter()
+    embedding_model.encode(
+        ["warmup"],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        batch_size=1,
+    )
+    logger.info("Embedding model warmup finished in %.2fs", perf_counter() - started_at)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _configure_cpu_runtime()
@@ -63,28 +76,49 @@ async def lifespan(app: FastAPI):
 
     app.state.embedding_model = embedding_model
     app.state.llm_client = llm_client
-    vision_preload_task: asyncio.Task[None] | None = None
+    preload_tasks: list[asyncio.Task[None]] = []
+    if settings.embedding_preload:
+        preload_tasks.append(
+            asyncio.create_task(
+                asyncio.to_thread(_warmup_embedding_model, embedding_model),
+                name="rag-service-embedding-preload",
+            )
+        )
+        logger.info("Scheduled preload for embedding model: %s", settings.embedder_model)
+
     if settings.vision_enabled and settings.vision_preload:
         from .vision import preload_vision_model
 
-        vision_preload_task = asyncio.create_task(
-            preload_vision_model(
-                settings.vision_model_id,
-                settings.vision_max_new_tokens,
-                settings.vision_max_image_side,
-            ),
-            name="rag-service-vision-preload",
+        preload_tasks.append(
+            asyncio.create_task(
+                preload_vision_model(
+                    settings.vision_model_id,
+                    settings.vision_max_new_tokens,
+                    settings.vision_max_image_side,
+                ),
+                name="rag-service-vision-preload",
+            )
         )
-        app.state.vision_preload_task = vision_preload_task
-        logger.info("Scheduled background preload for vision model: %s", settings.vision_model_id)
+        logger.info("Scheduled preload for vision model: %s", settings.vision_model_id)
+
+    app.state.preload_tasks = preload_tasks
+    if preload_tasks and settings.blocking_model_preload:
+        logger.info("Blocking startup preload enabled; waiting for %d task(s)", len(preload_tasks))
+        results = await asyncio.gather(*preload_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
+        logger.info("Blocking startup preload finished")
 
     try:
         yield
     finally:
-        if vision_preload_task is not None and not vision_preload_task.done():
-            vision_preload_task.cancel()
+        for preload_task in preload_tasks:
+            if preload_task.done():
+                continue
+            preload_task.cancel()
             with suppress(asyncio.CancelledError):
-                await vision_preload_task
+                await preload_task
         await _close_resource(llm_client)
         await _close_resource(llm_http_client)
 

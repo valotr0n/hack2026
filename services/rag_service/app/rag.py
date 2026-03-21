@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import re
 import inspect
 import json
+import logging
+import re
 from io import BytesIO, StringIO
 from pathlib import Path
+from time import perf_counter
 from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
@@ -21,6 +23,8 @@ from sentence_transformers import SentenceTransformer
 
 from .config import settings
 from .schemas import ChatHistoryMessage
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
@@ -154,7 +158,10 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     filename = file.filename or "document"
     suffix = Path(filename).suffix.lower()
     payload = await file.read()
+    started_at = perf_counter()
+    vision_elapsed = 0.0
 
+    text_extract_started_at = perf_counter()
     if suffix == ".pdf":
         reader = PdfReader(BytesIO(payload))
         text = "\n".join((page.extract_text() or "").strip() for page in reader.pages)
@@ -179,6 +186,7 @@ async def extract_text_from_upload(file: UploadFile) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported file type. Use PDF, DOCX, TXT, CSV, or XLSX.",
         )
+    text_extract_elapsed = perf_counter() - text_extract_started_at
 
     # Склеиваем переносы слов через дефис (артефакт PDF-парсинга)
     # "зави-\nсимости" → "зависимости"
@@ -186,13 +194,17 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     normalized_text = "\n".join(line for line in dehyphenated.splitlines() if line.strip()).strip()
 
     if settings.vision_enabled and suffix in (".pdf", ".docx"):
+        vision_started_at = perf_counter()
         image_descriptions = await extract_image_descriptions(
             payload,
             suffix,
             settings.vision_model_id,
             settings.vision_max_new_tokens,
             settings.vision_max_image_side,
+            settings.vision_min_image_side,
+            settings.vision_max_images_per_document,
         )
+        vision_elapsed = perf_counter() - vision_started_at
         if image_descriptions:
             visual_block = "\n\n".join(image_descriptions)
             normalized_text = f"{normalized_text}\n\n--- Визуальные элементы документа ---\n{visual_block}"
@@ -202,6 +214,16 @@ async def extract_text_from_upload(file: UploadFile) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file does not contain readable text.",
         )
+
+    logger.info(
+        "Extracted upload text: filename=%s suffix=%s chars=%d text_extract=%.2fs vision=%.2fs total=%.2fs",
+        filename,
+        suffix,
+        len(normalized_text),
+        text_extract_elapsed,
+        vision_elapsed,
+        perf_counter() - started_at,
+    )
 
     return normalized_text
 
