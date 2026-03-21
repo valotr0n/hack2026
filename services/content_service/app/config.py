@@ -12,6 +12,10 @@ class Settings:
     stt_mode: str = os.getenv("STT_MODE", "auto")
     whisper_model_size: str = os.getenv("WHISPER_MODEL_SIZE", "small")
 
+    # Закрытый контур — ollama
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
     tts_voice_alex: str = os.getenv("TTS_VOICE_ALEX", "ru-RU-DmitryNeural")
     tts_voice_maria: str = os.getenv("TTS_VOICE_MARIA", "ru-RU-SvetlanaNeural")
 

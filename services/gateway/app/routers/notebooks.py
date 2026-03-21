@@ -53,6 +53,12 @@ def _content(path: str) -> str:
     return f"{settings.content_service_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _contour_headers(request: Request) -> dict[str, str]:
+    """Пробрасывает X-Contour из запроса клиента в content_service."""
+    contour = request.headers.get("x-contour", "open")
+    return {"x-contour": contour if contour in ("open", "closed") else "open"}
+
+
 async def _owned_notebook(notebook_id: str, user_id: str) -> dict[str, Any]:
     notebook = await get_notebook(settings.db_path, notebook_id)
     if not notebook:
@@ -462,7 +468,7 @@ async def summary(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/summary"), json={"text": text, "style": req.style})
+        resp = await client.post(_content("/summary"), json={"text": text, "style": req.style}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "summary", data.get("summary", ""))
@@ -504,7 +510,7 @@ async def mindmap(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/mindmap"), json={"text": text})
+        resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "mindmap", _json.dumps(data, ensure_ascii=False))
@@ -543,7 +549,7 @@ async def flashcards(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count})
+        resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "flashcards", _json.dumps(data.get("flashcards", []), ensure_ascii=False))
@@ -582,7 +588,7 @@ async def podcast(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone})
+        resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
@@ -625,7 +631,7 @@ async def contract(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/contract"), json={"text": text})
+        resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "contract", _json.dumps(data, ensure_ascii=False))
@@ -665,7 +671,7 @@ async def knowledge_graph(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/knowledge-graph"), json={"text": text})
+        resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "knowledge_graph", _json.dumps(data, ensure_ascii=False))
@@ -717,6 +723,7 @@ async def check_flashcard(
                 "correct_answer": req.correct_answer,
                 "user_answer": req.user_answer,
             },
+            headers=_contour_headers(request),
         )
         resp.raise_for_status()
         return resp.json()
@@ -775,6 +782,7 @@ async def multi_search(
         resp = await client.post(
             _content("/answer"),
             json={"text": combined, "question": req.query},
+            headers=_contour_headers(request),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -815,7 +823,7 @@ async def timeline(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/timeline"), json={"text": text})
+        resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
@@ -868,7 +876,7 @@ async def generate_questions(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context})
+        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
@@ -930,6 +938,7 @@ async def compare_notebooks(
                 "label_a": nb_a["title"],
                 "label_b": nb_b["title"],
             },
+            headers=_contour_headers(request),
         )
         resp.raise_for_status()
         data = resp.json()

@@ -1,4 +1,16 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./data/ollama:/root/.ollama
+    networks:
+      - ai-platform
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
