@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import ast
 import io
 import json
+import logging
+import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class PresentationRequest(BaseModel):
@@ -17,8 +21,8 @@ class PresentationRequest(BaseModel):
     style: str = "business"  # business | academic | popular
     slides: list[dict] | None = None
     domain: str = "general"
-    doc_types: list[str] = []
-    tags: list[str] = []
+    doc_types: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
 class PresentationResponse(BaseModel):
@@ -233,6 +237,131 @@ def _is_generic_title(title: str) -> bool:
     return normalized in _GENERIC_SLIDE_TITLES
 
 
+def _strip_code_fences(raw: str) -> str:
+    return re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+
+
+def _parse_presentation_payload(raw: str) -> list[dict] | None:
+    cleaned = _strip_code_fences(raw)
+    if not cleaned:
+        return None
+
+    candidates: list[str] = [cleaned]
+    start = cleaned.find("{")
+    end = cleaned.rfind("}") + 1
+    if start >= 0 and end > start:
+        candidates.append(cleaned[start:end])
+
+    for candidate in candidates:
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                data = loader(candidate)
+            except Exception:
+                continue
+
+            if isinstance(data, dict):
+                slides = data.get("slides")
+                if isinstance(slides, list):
+                    return slides
+            if isinstance(data, list):
+                return data
+    return None
+
+
+def _extract_candidate_bullets(raw: str) -> list[str]:
+    cleaned = _strip_code_fences(raw)
+    if not cleaned:
+        return []
+
+    candidates: list[str] = []
+    for line in cleaned.splitlines():
+        value = line.strip().strip(",")
+        if not value or value in {"{", "}", "[", "]"}:
+            continue
+        if value.lower().startswith(("slides", '"slides"', "'slides'")):
+            continue
+        value = re.sub(r'^[\-\*\u2022\d\.\)\(\"\']+\s*', "", value)
+        value = value.strip(" \"'")
+        if len(value) < 12:
+            continue
+        if ":" in value and len(value) < 28:
+            continue
+        candidates.append(value)
+
+    if len(candidates) < 4:
+        sentence_candidates = [
+            chunk.strip()
+            for chunk in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", cleaned))
+            if len(chunk.strip()) >= 20
+        ]
+        candidates.extend(sentence_candidates)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(candidate[:220])
+    return unique
+
+
+def _fallback_slides_from_text(
+    text: str,
+    title: str,
+    domain: str,
+    tags: list[str],
+    raw: str = "",
+) -> list[dict]:
+    bullets = _extract_candidate_bullets(raw)
+    if len(bullets) < 6:
+        bullets.extend(_extract_candidate_bullets(text))
+
+    if not bullets:
+        bullets = [
+            "Материал загружен, но автоматическая структура получилась неполной.",
+            "Проверьте полноту исходного текста и повторите генерацию при необходимости.",
+            "Ключевые выводы лучше формировать после очистки или детализации источников.",
+        ]
+
+    content_bullets = bullets[:12]
+    slides: list[dict] = [
+        {
+            "type": "title",
+            "title": title.strip() or "Презентация",
+            "subtitle": _default_subtitle(domain, tags),
+        }
+    ]
+
+    for chunk_index, start in enumerate(range(0, len(content_bullets), 3)):
+        chunk = content_bullets[start:start + 3]
+        if not chunk:
+            continue
+        slides.append(
+            {
+                "type": "content",
+                "title": _fallback_slide_title(domain, chunk_index, "content"),
+                "bullets": chunk,
+            }
+        )
+        if len(slides) >= 5:
+            break
+
+    summary_bullets = bullets[:2] if len(bullets) >= 2 else content_bullets[:2]
+    if not summary_bullets:
+        summary_bullets = ["Ключевые тезисы требуют ручной проверки."]
+    slides.append(
+        {
+            "type": "summary",
+            "title": _fallback_slide_title(domain, len(slides), "summary"),
+            "bullets": summary_bullets[:2],
+        }
+    )
+
+    return _normalize_slides(slides, title, domain, tags)
+
+
 async def _generate_slides(
     text: str,
     title: str,
@@ -281,19 +410,33 @@ async def _generate_slides(
         f"Текст:\n{text}"
     )
 
-    raw = await chat(
-        system=system,
-        user=user,
-        max_tokens=settings.presentation_max_tokens,
-    )
-
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
-        return _normalize_slides(data.get("slides", []), title, resolved_domain, tags), resolved_domain
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать структуру презентации")
+        raw = await chat(
+            system=system,
+            user=user,
+            temperature=0.2,
+            max_tokens=settings.presentation_max_tokens,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Presentation generation failed before parsing: domain=%s style=%s error=%s",
+            resolved_domain,
+            style,
+            exc,
+        )
+        return _fallback_slides_from_text(text, title, resolved_domain, tags), resolved_domain
+
+    parsed_slides = _parse_presentation_payload(raw)
+    if parsed_slides is None:
+        logger.warning(
+            "Presentation parse failed: domain=%s style=%s raw_sample=%r",
+            resolved_domain,
+            style,
+            raw[:500],
+        )
+        return _fallback_slides_from_text(text, title, resolved_domain, tags, raw=raw), resolved_domain
+
+    return _normalize_slides(parsed_slides, title, resolved_domain, tags), resolved_domain
 
 
 def _normalize_slides(slides: list[dict], title: str, domain: str, tags: list[str]) -> list[dict]:

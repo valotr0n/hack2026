@@ -1691,6 +1691,12 @@ async def presentation_preview(
             ),
         )
         return data
+    except httpx.HTTPStatusError as exc:
+        try:
+            detail = exc.response.json().get("detail", exc.response.text)
+        except Exception:
+            detail = exc.response.text
+        raise HTTPException(status_code=exc.response.status_code, detail=detail)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1758,6 +1764,12 @@ async def presentation_download(
             )
         except httpx.RequestError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except Exception:
+                detail = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=detail)
     else:
         cached = notebook.get("presentation")
         if isinstance(cached, dict):
@@ -1778,6 +1790,12 @@ async def presentation_download(
             timeout=300.0,
         )
         resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        try:
+            detail = exc.response.json().get("detail", exc.response.text)
+        except Exception:
+            detail = exc.response.text
+        raise HTTPException(status_code=exc.response.status_code, detail=detail)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
