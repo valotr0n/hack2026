@@ -41,7 +41,7 @@ def _synthesize_sync(text: str, speaker: str, output_path: str) -> None:
     from pydub import AudioSegment
 
     wav_path = output_path.replace(".mp3", ".wav")
-    torchaudio.save(wav_path, audio.unsqueeze(0), SAMPLE_RATE)
+    torchaudio.save(wav_path, audio.unsqueeze(0), SAMPLE_RATE, format="wav")
     AudioSegment.from_wav(wav_path).export(output_path, format="mp3")
     try:
         os.remove(wav_path)
