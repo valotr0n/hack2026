@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -24,7 +24,6 @@ from ..database import (
     save_notebook_content,
     update_notebook_contour,
     update_notebook_title,
-    update_source_status,
 )
 
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
@@ -70,7 +69,11 @@ async def _owned_notebook(notebook_id: str, user_id: str) -> dict[str, Any]:
     return notebook
 
 
-async def _notebook_text(client: httpx.AsyncClient, notebook_id: str) -> str:
+async def _notebook_text(
+    client: httpx.AsyncClient,
+    notebook_id: str,
+    max_length: int | None = _MAX_TEXT_LENGTH,
+) -> str:
     try:
         resp = await client.get(_rag(f"/notebook/{notebook_id}/content"))
         resp.raise_for_status()
@@ -86,8 +89,8 @@ async def _notebook_text(client: httpx.AsyncClient, notebook_id: str) -> str:
             detail="Блокнот пуст — загрузите хотя бы один источник",
         )
     # Мягкое обрезание: не ломаем слово посередине
-    if len(text) > _MAX_TEXT_LENGTH:
-        text = text[:_MAX_TEXT_LENGTH].rsplit(" ", 1)[0]
+    if max_length is not None and len(text) > max_length:
+        text = text[:max_length].rsplit(" ", 1)[0]
     return text
 
 
@@ -292,110 +295,43 @@ async def delete(
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 
-async def _do_upload(
-    db_path: str,
-    rag_url: str,
-    source_id: str,
-    notebook_id: str,
-    filename: str,
-    file_content: bytes,
-    content_type: str,
-) -> None:
-    """Background task: загружает файл в RAG и обновляет статус источника."""
-    try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            rag_resp = await client.post(
-                rag_url,
-                files={"file": (filename, io.BytesIO(file_content), content_type)},
-                data={"notebook_id": notebook_id},
-            )
-            rag_resp.raise_for_status()
-        chunks = rag_resp.json().get("chunks", 0)
-        await update_source_status(db_path, source_id, "ready", chunks_count=chunks)
-        await clear_notebook_cache(db_path, notebook_id)
-    except Exception as exc:
-        await update_source_status(db_path, source_id, "error", error=str(exc))
-
-
 @router.post(
     "/{notebook_id}/sources",
     status_code=status.HTTP_201_CREATED,
     summary="Загрузить документ",
-    description="""
-Загружает файл (PDF, DOCX, TXT, CSV, XLSX) в блокнот и запускает индексацию в фоне.
-
-**Сразу возвращает** запись источника со `status: "processing"`.
-Для отслеживания завершения используйте:
-`GET /notebooks/{id}/sources/{source_id}/status`
-
-Таблицы (CSV, XLSX) конвертируются в текст автоматически.
-    """,
+    description="Загружает файл (PDF, DOCX, TXT, CSV, XLSX) в блокнот. Документ автоматически разбивается на чанки и индексируется для поиска. Таблицы конвертируются в текст. Возвращает `id` источника.",
 )
 async def upload_source(
     notebook_id: str,
-    background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
 
     file_content = await file.read()
-    filename = file.filename or "document"
-    content_type = file.content_type or "application/octet-stream"
+    try:
+        rag_resp = await client.post(
+            _rag("/upload"),
+            files={"file": (file.filename, io.BytesIO(file_content), file.content_type or "application/octet-stream")},
+            data={"notebook_id": notebook_id},
+        )
+        rag_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
 
+    rag_data = rag_resp.json()
     source = await create_source(
         settings.db_path,
         notebook_id,
-        filename,
-        chunks_count=0,
-        status="processing",
+        file.filename or "document",
+        rag_data.get("chunks", 0),
     )
-    background_tasks.add_task(
-        _do_upload,
-        settings.db_path,
-        _rag("/upload"),
-        source["id"],
-        notebook_id,
-        filename,
-        file_content,
-        content_type,
-    )
+    await clear_notebook_cache(settings.db_path, notebook_id)
     return source
-
-
-async def _do_transcribe(
-    db_path: str,
-    content_url: str,
-    rag_url: str,
-    source_id: str,
-    notebook_id: str,
-    filename: str,
-    txt_filename: str,
-    file_content: bytes,
-    content_type: str,
-) -> None:
-    """Background task: транскрибирует аудио/видео, загружает в RAG, обновляет статус."""
-    try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            transcribe_resp = await client.post(
-                content_url,
-                files={"file": (filename, io.BytesIO(file_content), content_type)},
-            )
-            transcribe_resp.raise_for_status()
-            text = transcribe_resp.json().get("text", "")
-
-            rag_resp = await client.post(
-                rag_url,
-                files={"file": (txt_filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
-                data={"notebook_id": notebook_id},
-            )
-            rag_resp.raise_for_status()
-        chunks = rag_resp.json().get("chunks", 0)
-        await update_source_status(db_path, source_id, "ready", chunks_count=chunks)
-        await clear_notebook_cache(db_path, notebook_id)
-    except Exception as exc:
-        await update_source_status(db_path, source_id, "error", error=str(exc))
 
 
 @router.post(
@@ -409,81 +345,57 @@ async def _do_transcribe(
 - Аудио: mp3, wav, ogg, m4a, flac, aac, opus
 - Видео: mp4, avi, mov, mkv, webm, flv
 
-**Сразу возвращает** запись источника со `status: "processing"`.
-Для отслеживания используйте:
-`GET /notebooks/{id}/sources/{source_id}/status`
+Возвращает созданный источник с `id`, `filename` (имя_файла_transcription.txt) и `chunks_count`.
     """,
 )
 async def transcribe_source(
     notebook_id: str,
-    background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
+    notebook = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
 
     file_content = await file.read()
-    filename = file.filename or "audio"
-    content_type = file.content_type or "application/octet-stream"
-    txt_filename = f"{Path(filename).stem}_transcription.txt"
+    try:
+        transcribe_resp = await client.post(
+            _content("/transcribe"),
+            files={"file": (file.filename, io.BytesIO(file_content), file.content_type or "application/octet-stream")},
+            timeout=300.0,
+        )
+        transcribe_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
 
+    text = transcribe_resp.json().get("text", "")
+    stem = Path(file.filename or "transcription").stem
+    txt_filename = f"{stem}_transcription.txt"
+
+    try:
+        rag_resp = await client.post(
+            _rag("/upload"),
+            files={"file": (txt_filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
+            data={"notebook_id": notebook_id},
+            timeout=120.0,
+        )
+        rag_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    rag_data = rag_resp.json()
     source = await create_source(
         settings.db_path,
         notebook_id,
         txt_filename,
-        chunks_count=0,
-        status="processing",
+        rag_data.get("chunks", 0),
     )
-    background_tasks.add_task(
-        _do_transcribe,
-        settings.db_path,
-        _content("/transcribe"),
-        _rag("/upload"),
-        source["id"],
-        notebook_id,
-        filename,
-        txt_filename,
-        file_content,
-        content_type,
-    )
+    await clear_notebook_cache(settings.db_path, notebook_id)
     return source
-
-
-@router.get(
-    "/{notebook_id}/sources/{source_id}/status",
-    summary="Статус обработки источника",
-    description="""
-Возвращает текущий статус индексации источника.
-
-**Статусы:**
-- `processing` — файл ещё обрабатывается
-- `ready` — индексация завершена, источник доступен для поиска
-- `error` — ошибка при обработке (поле `error` содержит описание)
-
-**Пример polling на JS:**
-```js
-const poll = async (notebookId, sourceId) => {
-  while (true) {
-    const { status, error } = await fetch(`/notebooks/${notebookId}/sources/${sourceId}/status`).then(r => r.json());
-    if (status === 'ready') break;
-    if (status === 'error') throw new Error(error);
-    await new Promise(r => setTimeout(r, 2000));
-  }
-};
-```
-    """,
-)
-async def source_status(
-    notebook_id: str,
-    source_id: str,
-    user_id: str = Depends(require_auth),
-) -> dict[str, Any]:
-    await _owned_notebook(notebook_id, user_id)
-    source = await get_source(settings.db_path, source_id)
-    if not source or source["notebook_id"] != notebook_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Источник не найден")
-    return {"status": source["status"], "error": source.get("error"), "chunks_count": source["chunks_count"]}
 
 
 @router.delete(
@@ -602,10 +514,16 @@ async def summary(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    # Для иерархического саммари нужен полный текст без ограничения
+    text = await _notebook_text(client, notebook_id, max_length=None)
 
     try:
-        resp = await client.post(_content("/summary"), json={"text": text, "style": req.style}, headers=_contour_headers(notebook))
+        resp = await client.post(
+            _content("/summary"),
+            json={"text": text, "style": req.style},
+            headers=_contour_headers(notebook),
+            timeout=300.0,
+        )
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "summary", data.get("summary", ""))
