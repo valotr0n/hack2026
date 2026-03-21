@@ -5,6 +5,7 @@ import csv
 import inspect
 import json
 import logging
+import math
 import re
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -26,10 +27,9 @@ from .schemas import ChatHistoryMessage
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 50
 TOP_K = 5
 EmbeddingPromptName = Literal["search_query", "search_document"]
+EmbeddingBackend = Literal["local", "open"]
 
 SYSTEM_PROMPT = """\
 Ты — точный аналитик документов. Работаешь с материалами, загруженными пользователем.
@@ -194,15 +194,34 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     normalized_text = "\n".join(line for line in dehyphenated.splitlines() if line.strip()).strip()
 
     if settings.vision_enabled and suffix in (".pdf", ".docx"):
+        effective_max_images_per_document = settings.vision_max_images_per_document
+        effective_max_new_tokens = settings.vision_max_new_tokens
+        if len(payload) >= settings.vision_large_document_bytes_threshold:
+            effective_max_images_per_document = min(
+                effective_max_images_per_document,
+                settings.vision_large_document_max_images,
+            )
+            effective_max_new_tokens = min(
+                effective_max_new_tokens,
+                settings.vision_large_document_max_new_tokens,
+            )
+            logger.info(
+                "Large document vision throttle enabled: filename=%s bytes=%d max_images=%d max_new_tokens=%d",
+                filename,
+                len(payload),
+                effective_max_images_per_document,
+                effective_max_new_tokens,
+            )
+
         vision_started_at = perf_counter()
         image_descriptions = await extract_image_descriptions(
             payload,
             suffix,
             settings.vision_model_id,
-            settings.vision_max_new_tokens,
+            effective_max_new_tokens,
             settings.vision_max_image_side,
             settings.vision_min_image_side,
-            settings.vision_max_images_per_document,
+            effective_max_images_per_document,
         )
         vision_elapsed = perf_counter() - vision_started_at
         if image_descriptions:
@@ -229,7 +248,10 @@ async def extract_text_from_upload(file: UploadFile) -> str:
 
 
 def split_text_into_chunks(full_text: str) -> list[str]:
-    splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    splitter = SentenceSplitter(
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+    )
     nodes = splitter.get_nodes_from_documents([Document(text=full_text)])
     chunks = [content for node in nodes if (content := node.get_content().strip())]
 
@@ -270,23 +292,118 @@ def _encode_texts(
     return embeddings.tolist()
 
 
-async def fetch_embeddings(
-    embedding_model: SentenceTransformer,
+def _normalize_embedding(embedding: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in embedding))
+    if norm <= 0:
+        return embedding
+    return [value / norm for value in embedding]
+
+
+def _batched(items: list[str], batch_size: int) -> list[list[str]]:
+    size = max(1, batch_size)
+    return [items[index:index + size] for index in range(0, len(items), size)]
+
+
+def resolve_requested_embedding_backend(contour: str | None) -> EmbeddingBackend:
+    return "open" if (contour or "").strip().lower() == "open" else "local"
+
+
+async def _fetch_open_embedding_batch(
+    open_embedder_client: AsyncOpenAI,
     texts: list[str],
+) -> list[list[float]]:
+    response = await open_embedder_client.embeddings.create(
+        model=settings.open_embedder_model,
+        input=texts,
+    )
+    data = sorted(response.data, key=lambda item: getattr(item, "index", 0))
+    embeddings: list[list[float]] = []
+    for item in data:
+        raw_embedding = list(item.embedding or [])
+        if not raw_embedding:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Open embedder returned an empty vector.",
+            )
+        embeddings.append(_normalize_embedding([float(value) for value in raw_embedding]))
+    return embeddings
+
+
+async def fetch_embeddings(
+    backend: EmbeddingBackend,
+    texts: list[str],
+    embedding_model: SentenceTransformer | None = None,
+    open_embedder_client: AsyncOpenAI | None = None,
     prompt_name: EmbeddingPromptName | None = None,
 ) -> list[list[float]]:
-    try:
-        embeddings = await asyncio.to_thread(
-            _encode_texts,
-            embedding_model,
-            texts,
-            prompt_name,
+    if not texts:
+        return []
+
+    started_at = perf_counter()
+    if backend == "open":
+        if open_embedder_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Open embedder client is not configured.",
+            )
+
+        batches = _batched(texts, settings.open_embedding_batch_size)
+        batch_results: list[list[list[float]] | None] = [None] * len(batches)
+        semaphore = asyncio.Semaphore(max(1, settings.open_embedding_concurrency))
+
+        async def _embed_batch(index: int, batch: list[str]) -> None:
+            async with semaphore:
+                try:
+                    batch_results[index] = await _fetch_open_embedding_batch(
+                        open_embedder_client,
+                        batch,
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Open embedding generation failed: {exc}",
+                    ) from exc
+
+        await asyncio.gather(
+            *(_embed_batch(index, batch) for index, batch in enumerate(batches))
         )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Local embedding generation failed: {exc}",
-        ) from exc
+        embeddings = [
+            embedding
+            for batch in batch_results
+            for embedding in (batch or [])
+        ]
+        logger.info(
+            "Embeddings generated: backend=open texts=%d batches=%d concurrency=%d total=%.2fs",
+            len(texts),
+            len(batches),
+            max(1, settings.open_embedding_concurrency),
+            perf_counter() - started_at,
+        )
+    else:
+        if embedding_model is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Local embedding model is not configured.",
+            )
+
+        try:
+            embeddings = await asyncio.to_thread(
+                _encode_texts,
+                embedding_model,
+                texts,
+                prompt_name,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Local embedding generation failed: {exc}",
+            ) from exc
+        logger.info(
+            "Embeddings generated: backend=local texts=%d batch_size=%d total=%.2fs",
+            len(texts),
+            settings.embedding_batch_size,
+            perf_counter() - started_at,
+        )
 
     if len(embeddings) != len(texts):
         raise HTTPException(
@@ -294,7 +411,12 @@ async def fetch_embeddings(
             detail="Embedding model returned an unexpected number of vectors.",
         )
 
-    vector_size = get_embedding_dimension(embedding_model)
+    vector_size = len(embeddings[0]) if embeddings else 0
+    if vector_size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Embedding backend returned an invalid vector size.",
+        )
     for embedding in embeddings:
         if not isinstance(embedding, list) or len(embedding) != vector_size:
             raise HTTPException(
@@ -359,6 +481,7 @@ async def _upsert_qdrant_points_via_rest(
     embeddings: list[list[float]],
     filename: str,
     source_id: str,
+    embedding_backend: EmbeddingBackend,
 ) -> None:
     points = [
         {
@@ -369,6 +492,7 @@ async def _upsert_qdrant_points_via_rest(
                 "source": filename,
                 "chunk_index": index,
                 "source_id": source_id,
+                "embedding_backend": embedding_backend,
             },
         }
         for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
@@ -385,6 +509,7 @@ async def create_document_collection(
     filename: str,
     chunks: list[str],
     embeddings: list[list[float]],
+    embedding_backend: EmbeddingBackend,
     notebook_id: str | None = None,
     source_id: str | None = None,
 ) -> str:
@@ -393,9 +518,75 @@ async def create_document_collection(
 
     if not await _collection_exists(collection_id):
         await _create_qdrant_collection_via_rest(collection_id, embedding_dimension)
+    else:
+        current_vector_size = await get_collection_vector_size(collection_id)
+        if current_vector_size is not None and current_vector_size != embedding_dimension:
+            existing_backend = await get_collection_embedding_backend(collection_id)
+            if existing_backend is None:
+                await delete_collection(collection_id)
+                await _create_qdrant_collection_via_rest(collection_id, embedding_dimension)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Коллекция уже использует другой embedding backend. "
+                        "Очистите блокнот или верните исходный контур."
+                    ),
+                )
 
-    await _upsert_qdrant_points_via_rest(collection_id, chunks, embeddings, filename, sid)
+    await _upsert_qdrant_points_via_rest(
+        collection_id,
+        chunks,
+        embeddings,
+        filename,
+        sid,
+        embedding_backend,
+    )
     return collection_id
+
+
+async def get_collection_vector_size(collection_id: str) -> int | None:
+    if not await _collection_exists(collection_id):
+        return None
+
+    result = await _qdrant_request("GET", f"/collections/{collection_id}")
+    collection_result = result.get("result") or {}
+    vectors = (
+        collection_result.get("config", {})
+        .get("params", {})
+        .get("vectors")
+    )
+    if isinstance(vectors, dict):
+        size = vectors.get("size")
+        if isinstance(size, int) and size > 0:
+            return size
+        default_vector = next(iter(vectors.values()), None)
+        if isinstance(default_vector, dict):
+            nested_size = default_vector.get("size")
+            if isinstance(nested_size, int) and nested_size > 0:
+                return nested_size
+    return None
+
+
+async def get_collection_embedding_backend(collection_id: str) -> EmbeddingBackend | None:
+    if not await _collection_exists(collection_id):
+        return None
+
+    result = await _qdrant_request(
+        "POST",
+        f"/collections/{collection_id}/points/scroll",
+        {
+            "limit": 1,
+            "with_payload": True,
+            "with_vector": False,
+        },
+    )
+    points = (result.get("result") or {}).get("points") or []
+    if not points:
+        return None
+
+    payload = points[0].get("payload") or {}
+    return "open" if payload.get("embedding_backend") == "open" else "local"
 
 
 async def get_source_content(

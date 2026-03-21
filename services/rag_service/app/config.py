@@ -32,9 +32,9 @@ def _default_torch_interop_threads() -> int:
 def _default_embedding_batch_size() -> int:
     cpus = _available_cpus()
     if cpus >= 24:
-        return 128
+        return 256
     if cpus >= 12:
-        return 64
+        return 96
     return 32
 
 
@@ -45,18 +45,46 @@ def _default_blocking_model_preload() -> bool:
 def _default_vision_max_images_per_document() -> int:
     cpus = _available_cpus()
     if cpus >= 24:
-        return 6
+        return 4
     if cpus >= 12:
         return 4
     return 3
+
+
+def _default_open_embedding_batch_size() -> int:
+    cpus = _available_cpus()
+    if cpus >= 24:
+        return 256
+    if cpus >= 12:
+        return 128
+    return 64
+
+
+def _default_open_embedding_concurrency() -> int:
+    cpus = _available_cpus()
+    if cpus >= 24:
+        return 4
+    if cpus >= 12:
+        return 2
+    return 1
 
 
 class Settings(BaseSettings):
     llm_base_url: str = "https://hackai.centrinvest.ru:6630/v1"
     llm_api_key: str = "hackaton2026"
     llm_model: str = "gpt-oss-20b"
+    open_embedder_base_url: str = "https://hackai.centrinvest.ru:6620/v1"
+    open_embedder_api_key: str = os.getenv("OPEN_EMBEDDER_API_KEY") or os.getenv("LLM_API_KEY") or "hackaton2026"
+    open_embedder_model: str = "Qwen3-Embedding-0.6B"
+    open_embedding_timeout_seconds: float = 120.0
+    open_embedding_max_connections: int = 128
+    open_embedding_max_keepalive_connections: int = 32
+    open_embedding_batch_size: int = _default_open_embedding_batch_size()
+    open_embedding_concurrency: int = _default_open_embedding_concurrency()
     embedder_model: str = "ai-forever/ru-en-RoSBERTa"
     qdrant_url: str = "http://qdrant:6333"
+    chunk_size: int = 1024
+    chunk_overlap: int = 32
     torch_num_threads: int = _default_torch_threads()
     torch_num_interop_threads: int = _default_torch_interop_threads()
     embedding_batch_size: int = _default_embedding_batch_size()
@@ -65,10 +93,13 @@ class Settings(BaseSettings):
     vision_enabled: bool = True
     vision_model_id: str = "AvitoTech/avision"
     vision_preload: bool = True
-    vision_max_new_tokens: int = 64
-    vision_max_image_side: int = 1024
-    vision_min_image_side: int = 180
+    vision_max_new_tokens: int = 48
+    vision_max_image_side: int = 896
+    vision_min_image_side: int = 220
     vision_max_images_per_document: int = _default_vision_max_images_per_document()
+    vision_large_document_bytes_threshold: int = 4_000_000
+    vision_large_document_max_images: int = 1
+    vision_large_document_max_new_tokens: int = 32
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
-from sentence_transformers import SentenceTransformer
 
-from ..dependencies import get_embedding_model, get_llm_client
+from ..dependencies import get_llm_client
 from ..rag import (
     build_chat_messages,
     build_system_prompt,
     create_llm_stream,
     fetch_embeddings,
+    get_collection_embedding_backend,
+    resolve_requested_embedding_backend,
     search_document_chunks,
     stream_chat_response,
 )
@@ -20,7 +21,7 @@ router = APIRouter(tags=["rag"])
 @router.post("/chat")
 async def chat(
     payload: ChatRequest,
-    embedding_model: SentenceTransformer = Depends(get_embedding_model),
+    request: Request,
     llm_client: AsyncOpenAI = Depends(get_llm_client),
 ) -> StreamingResponse:
     if not payload.query.strip():
@@ -29,11 +30,29 @@ async def chat(
             detail="Query must not be empty.",
         )
 
+    requested_backend = resolve_requested_embedding_backend(request.headers.get("x-contour"))
+    collection_backend = await get_collection_embedding_backend(payload.doc_id)
+    if collection_backend is not None and collection_backend != requested_backend:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Блокнот индексирован в другом контуре. "
+                "Верните исходный контур или пересоберите индекс после очистки источников."
+            ),
+        )
+
+    embedding_backend = collection_backend or requested_backend
+    embedding_model = request.app.state.embedding_model if embedding_backend == "local" else None
+    open_embedder_client = (
+        request.app.state.open_embedder_client if embedding_backend == "open" else None
+    )
     query_embedding = (
         await fetch_embeddings(
-            embedding_model,
+            embedding_backend,
             [payload.query],
-            prompt_name="search_query",
+            embedding_model=embedding_model,
+            open_embedder_client=open_embedder_client,
+            prompt_name="search_query" if embedding_backend == "local" else None,
         )
     )[0]
     chunks = await search_document_chunks(

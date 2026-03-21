@@ -494,6 +494,7 @@ async def upload_source(
             _rag("/upload"),
             files={"file": (file.filename, io.BytesIO(file_content), file.content_type or "application/octet-stream")},
             data={"notebook_id": notebook_id},
+            headers=_contour_headers(notebook),
         )
         rag_resp.raise_for_status()
     except httpx.RequestError as exc:
@@ -576,7 +577,8 @@ async def transcribe_source(
             _rag("/upload"),
             files={"file": (txt_filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
             data={"notebook_id": notebook_id},
-            timeout=120.0,
+            headers=_contour_headers(notebook),
+            timeout=300.0,
         )
         rag_resp.raise_for_status()
     except httpx.RequestError as exc:
@@ -591,6 +593,7 @@ async def transcribe_source(
         txt_filename,
         rag_data.get("chunks", 0),
         status="ready",
+        source_id=rag_data.get("source_id"),
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = text[:500]
@@ -730,6 +733,7 @@ async def upload_source_url(
                 _rag("/upload"),
                 files={"file": (filename, io.BytesIO(pdf_resp.content), "application/pdf")},
                 data={"notebook_id": notebook_id},
+                headers=_contour_headers(notebook),
             )
             rag_resp.raise_for_status()
         except httpx.RequestError as exc:
@@ -737,7 +741,14 @@ async def upload_source_url(
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
         rag_data = rag_resp.json()
-        source = await create_source(settings.db_path, notebook_id, filename, rag_data.get("chunks", 0), status="ready")
+        source = await create_source(
+            settings.db_path,
+            notebook_id,
+            filename,
+            rag_data.get("chunks", 0),
+            status="ready",
+            source_id=rag_data.get("source_id"),
+        )
         await clear_notebook_cache(settings.db_path, notebook_id)
         preview = rag_data.get("preview", "")
         if preview.strip():
@@ -763,6 +774,7 @@ async def upload_source_url(
             _rag("/upload"),
             files={"file": (filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
             data={"notebook_id": notebook_id},
+            headers=_contour_headers(notebook),
         )
         rag_resp.raise_for_status()
     except httpx.RequestError as exc:
@@ -771,7 +783,14 @@ async def upload_source_url(
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
 
     rag_data = rag_resp.json()
-    source = await create_source(settings.db_path, notebook_id, filename, rag_data.get("chunks", 0), status="ready")
+    source = await create_source(
+        settings.db_path,
+        notebook_id,
+        filename,
+        rag_data.get("chunks", 0),
+        status="ready",
+        source_id=rag_data.get("source_id"),
+    )
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = text[:500]
     if preview.strip():
@@ -839,6 +858,7 @@ async def chat(
                 "query": req.query,
                 "history": [m.model_dump() for m in req.history],
             },
+            headers=_contour_headers(notebook),
         )
         rag_resp = await client.send(rag_request, stream=True)
     except httpx.RequestError as exc:
