@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from ..config import settings
+from ..llm import contour_var
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -88,6 +89,10 @@ async def _transcribe_api(audio_path: str, audio_filename: str) -> str:
 # ── Диспетчер по режиму ───────────────────────────────────────────────────────
 
 async def _transcribe(audio_path: str, audio_filename: str) -> str:
+    # Закрытый контур — всегда локальный Whisper, данные не покидают сервер
+    if contour_var.get() == "closed":
+        return await _transcribe_local(audio_path)
+
     mode = settings.stt_mode
 
     if mode == "local":
