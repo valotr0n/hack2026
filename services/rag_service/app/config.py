@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://qdrant:6333"
     vision_enabled: bool = True
     vision_model_id: str = "AvitoTech/avision"
+    vision_preload: bool = True
+    vision_max_new_tokens: int = 96
+    vision_max_image_side: int = 1280
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

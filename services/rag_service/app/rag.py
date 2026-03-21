@@ -186,7 +186,13 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     normalized_text = "\n".join(line for line in dehyphenated.splitlines() if line.strip()).strip()
 
     if settings.vision_enabled and suffix in (".pdf", ".docx"):
-        image_descriptions = await extract_image_descriptions(payload, suffix, settings.vision_model_id)
+        image_descriptions = await extract_image_descriptions(
+            payload,
+            suffix,
+            settings.vision_model_id,
+            settings.vision_max_new_tokens,
+            settings.vision_max_image_side,
+        )
         if image_descriptions:
             visual_block = "\n\n".join(image_descriptions)
             normalized_text = f"{normalized_text}\n\n--- Визуальные элементы документа ---\n{visual_block}"

@@ -34,6 +34,9 @@ services:
       QDRANT_URL: http://qdrant:6333
       VISION_ENABLED: ${VISION_ENABLED:-true}
       VISION_MODEL_ID: ${VISION_MODEL_ID:-AvitoTech/avision}
+      VISION_PRELOAD: ${VISION_PRELOAD:-true}
+      VISION_MAX_NEW_TOKENS: ${VISION_MAX_NEW_TOKENS:-96}
+      VISION_MAX_IMAGE_SIDE: ${VISION_MAX_IMAGE_SIDE:-1280}
     ports:
       - "8001:8001"
     depends_on:
@@ -105,7 +108,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS}
       TLS_CERT_FILE: ${TLS_CERT_FILE}
       TLS_KEY_FILE: ${TLS_KEY_FILE}
-      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-120}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-300}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
       DB_PATH: /app/data/platform.db
     depends_on:
