@@ -17,3 +17,4 @@ class ChatRequest(BaseModel):
 class UploadResponse(BaseModel):
     doc_id: str
     chunks: int
+    source_id: str

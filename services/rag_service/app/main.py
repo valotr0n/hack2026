@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 
 from .config import settings
 from .routers.chat import router as chat_router
+from .routers.notebook_content import router as notebook_content_router
 from .routers.upload import router as upload_router
 
 
@@ -56,6 +57,7 @@ app.add_middleware(
 
 app.include_router(upload_router)
 app.include_router(chat_router)
+app.include_router(notebook_content_router)
 
 
 @app.get("/health")

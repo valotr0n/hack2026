@@ -7,13 +7,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
 
-from .auth import create_access_token, require_auth, verify_credentials
 from .config import settings
+from .database import init_db
+from .routers.auth import router as auth_router
+from .routers.notebooks import router as notebooks_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +44,7 @@ UPSTREAMS = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db(settings.db_path)
     app.state.http_client = httpx.AsyncClient(timeout=settings.request_timeout_seconds)
     try:
         yield
@@ -60,6 +62,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(notebooks_router)
 
 
 @app.middleware("http")
@@ -81,76 +86,44 @@ async def log_requests(request: Request, call_next):
         )
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
 @app.get("/")
 async def root() -> dict[str, str]:
     return {
         "service": "gateway",
         "status": "ok",
-        "routes": "/api/rag/*, /api/content/*, /health, /auth/login",
+        "docs": "/docs",
     }
 
 
-@app.post("/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest) -> TokenResponse:
-    if not verify_credentials(req.username, req.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверный логин или пароль",
-        )
-    return TokenResponse(access_token=create_access_token(req.username))
-
-
-@app.get("/auth/me")
-async def me(username: str = Depends(require_auth)) -> dict[str, str]:
-    return {"username": username}
-
+# ── Low-level proxy (для прямого доступа к сервисам при отладке) ──────────────
 
 def _filter_request_headers(request: Request) -> dict[str, str]:
-    headers = {}
-    for key, value in request.headers.items():
-        if key.lower() in HOP_BY_HOP_HEADERS:
-            continue
-        headers[key] = value
-    return headers
+    return {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS
+    }
 
 
 def _filter_response_headers(headers: httpx.Headers) -> dict[str, str]:
-    filtered: dict[str, str] = {}
-    for key, value in headers.items():
-        if key.lower() in HOP_BY_HOP_HEADERS:
-            continue
-        filtered[key] = value
-    return filtered
+    return {
+        k: v for k, v in headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS
+    }
 
 
-async def _proxy_request(
-    request: Request,
-    upstream_base_url: str,
-    remainder_path: str,
-) -> Response:
+async def _proxy_request(request: Request, upstream_base_url: str, remainder_path: str) -> Response:
     client: httpx.AsyncClient = request.app.state.http_client
     upstream_path = remainder_path.lstrip("/")
     url = f"{upstream_base_url}/{upstream_path}" if upstream_path else upstream_base_url
-    query = request.url.query
-    if query:
-        url = f"{url}?{query}"
-
-    body = await request.body()
-    headers = _filter_request_headers(request)
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
 
     try:
         upstream_request = client.build_request(
-            request.method, url, content=body, headers=headers
+            request.method,
+            url,
+            content=await request.body(),
+            headers=_filter_request_headers(request),
         )
         upstream_response = await client.send(upstream_request, stream=True)
     except httpx.RequestError as exc:
@@ -190,27 +163,13 @@ async def _proxy_request(
 
 @app.api_route("/api/rag", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 @app.api_route("/api/rag/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-async def proxy_rag(
-    request: Request,
-    path: str = "",
-    _: str = Depends(require_auth),
-) -> Response:
+async def proxy_rag(request: Request, path: str = "") -> Response:
     return await _proxy_request(request, UPSTREAMS["rag"], path)
 
 
-@app.api_route(
-    "/api/content",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-)
-@app.api_route(
-    "/api/content/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-)
-async def proxy_content(
-    request: Request,
-    path: str = "",
-    _: str = Depends(require_auth),
-) -> Response:
+@app.api_route("/api/content", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@app.api_route("/api/content/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+async def proxy_content(request: Request, path: str = "") -> Response:
     return await _proxy_request(request, UPSTREAMS["content"], path)
 
 
@@ -218,24 +177,13 @@ async def _fetch_health(client: httpx.AsyncClient, service_name: str, base_url: 
     url = f"{base_url}/health"
     try:
         response = await client.get(url)
-        payload: Any
         try:
-            payload = response.json()
+            payload: Any = response.json()
         except ValueError:
             payload = response.text
-        return {
-            "service": service_name,
-            "ok": response.status_code == 200,
-            "status_code": response.status_code,
-            "data": payload,
-        }
+        return {"service": service_name, "ok": response.status_code == 200, "status_code": response.status_code, "data": payload}
     except httpx.RequestError as exc:
-        return {
-            "service": service_name,
-            "ok": False,
-            "status_code": None,
-            "error": str(exc),
-        }
+        return {"service": service_name, "ok": False, "status_code": None, "error": str(exc)}
 
 
 @app.get("/health")
@@ -249,8 +197,5 @@ async def health() -> JSONResponse:
     healthy = all(item["ok"] for item in checks)
     return JSONResponse(
         status_code=200 if healthy else 503,
-        content={
-            "status": "ok" if healthy else "degraded",
-            "services": checks,
-        },
+        content={"status": "ok" if healthy else "degraded", "services": checks},
     )

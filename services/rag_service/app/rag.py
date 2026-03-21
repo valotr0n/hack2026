@@ -190,20 +190,32 @@ async def _create_qdrant_collection_via_rest(doc_id: str, embedding_dimension: i
     )
 
 
+async def _collection_exists(collection_id: str) -> bool:
+    url = f"{settings.qdrant_url.rstrip('/')}/collections/{collection_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            response = await client.get(url)
+            return response.status_code == 200
+    except httpx.RequestError:
+        return False
+
+
 async def _upsert_qdrant_points_via_rest(
     doc_id: str,
     chunks: list[str],
     embeddings: list[list[float]],
     filename: str,
+    source_id: str,
 ) -> None:
     points = [
         {
-            "id": index,
+            "id": str(uuid4()),
             "vector": embedding,
             "payload": {
                 "text": chunk,
                 "source": filename,
                 "chunk_index": index,
+                "source_id": source_id,
             },
         }
         for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
@@ -220,11 +232,71 @@ async def create_document_collection(
     filename: str,
     chunks: list[str],
     embeddings: list[list[float]],
+    notebook_id: str | None = None,
+    source_id: str | None = None,
 ) -> str:
-    doc_id = str(uuid4())
-    await _create_qdrant_collection_via_rest(doc_id, embedding_dimension)
-    await _upsert_qdrant_points_via_rest(doc_id, chunks, embeddings, filename)
-    return doc_id
+    collection_id = notebook_id if notebook_id else str(uuid4())
+    sid = source_id if source_id else str(uuid4())
+
+    if not await _collection_exists(collection_id):
+        await _create_qdrant_collection_via_rest(collection_id, embedding_dimension)
+
+    await _upsert_qdrant_points_via_rest(collection_id, chunks, embeddings, filename, sid)
+    return collection_id
+
+
+async def delete_source_chunks(collection_id: str, source_id: str) -> None:
+    await _qdrant_request(
+        "POST",
+        f"/collections/{collection_id}/points/delete",
+        {"filter": {"must": [{"key": "source_id", "match": {"value": source_id}}]}},
+    )
+
+
+async def delete_collection(collection_id: str) -> None:
+    try:
+        await _qdrant_request("DELETE", f"/collections/{collection_id}")
+    except HTTPException:
+        pass
+
+
+async def get_notebook_content(collection_id: str) -> dict[str, Any]:
+    all_points: list[dict[str, Any]] = []
+    offset: Any = None
+
+    while True:
+        body: dict[str, Any] = {"limit": 1000, "with_payload": True, "with_vector": False}
+        if offset is not None:
+            body["offset"] = offset
+
+        result = await _qdrant_request(
+            "POST",
+            f"/collections/{collection_id}/points/scroll",
+            body,
+        )
+        result_data = result.get("result") or {}
+        all_points.extend(result_data.get("points") or [])
+        offset = result_data.get("next_page_offset")
+        if offset is None:
+            break
+
+    all_points.sort(key=lambda p: (
+        p.get("payload", {}).get("source", ""),
+        p.get("payload", {}).get("chunk_index", 0),
+    ))
+
+    texts = [
+        p["payload"]["text"]
+        for p in all_points
+        if p.get("payload", {}).get("text", "").strip()
+    ]
+    sources = sorted({
+        p["payload"]["source"]
+        for p in all_points
+        if p.get("payload", {}).get("source")
+    })
+
+    return {"text": "\n\n".join(texts), "sources": sources}
 
 
 async def search_document_chunks(

@@ -92,6 +92,8 @@ services:
       TLS_CERT_FILE: ${TLS_CERT_FILE}
       TLS_KEY_FILE: ${TLS_KEY_FILE}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-120}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
+      DB_PATH: /app/data/platform.db
     depends_on:
       rag_service:
         condition: service_healthy
@@ -102,6 +104,7 @@ services:
       - "443:443"
     volumes:
       - ./certs:/app/certs:ro
+      - ./data/gateway:/app/data
     networks:
       - ai-platform
     healthcheck:

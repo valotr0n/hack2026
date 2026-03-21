@@ -15,26 +15,23 @@ _ALGORITHM = "HS256"
 _TOKEN_EXPIRE_HOURS = 24
 
 
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
-def create_access_token(username: str) -> str:
+def create_access_token(user_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=_TOKEN_EXPIRE_HOURS)
     return jwt.encode(
-        {"sub": username, "exp": expire},
+        {"sub": user_id, "exp": expire},
         settings.auth_secret_key,
         algorithm=_ALGORITHM,
     )
 
 
 def _decode_token(token: str) -> str:
+    """Returns user_id from token."""
     try:
-        payload = jwt.decode(
-            token,
-            settings.auth_secret_key,
-            algorithms=[_ALGORITHM],
-        )
+        payload = jwt.decode(token, settings.auth_secret_key, algorithms=[_ALGORITHM])
         return payload["sub"]
     except jwt.ExpiredSignatureError:
         raise HTTPException(
@@ -53,11 +50,5 @@ def _decode_token(token: str) -> str:
 def require_auth(
     credentials: HTTPAuthorizationCredentials = Depends(_security),
 ) -> str:
+    """Returns user_id."""
     return _decode_token(credentials.credentials)
-
-
-def verify_credentials(username: str, password: str) -> bool:
-    return (
-        username == settings.auth_username
-        and _sha256(password) == settings.auth_password_hash
-    )

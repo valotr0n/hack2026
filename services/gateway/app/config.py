@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from dataclasses import dataclass
 
@@ -14,10 +13,6 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 @dataclass(frozen=True)
 class Settings:
     rag_service_url: str
@@ -29,8 +24,7 @@ class Settings:
     tls_cert_file: str
     tls_key_file: str
     auth_secret_key: str
-    auth_username: str
-    auth_password_hash: str
+    db_path: str
 
 
 settings = Settings(
@@ -43,6 +37,5 @@ settings = Settings(
     tls_cert_file=_env("TLS_CERT_FILE", "/certs/server.crt"),
     tls_key_file=_env("TLS_KEY_FILE", "/certs/server.key"),
     auth_secret_key=_env("AUTH_SECRET_KEY", "change-me-in-production"),
-    auth_username=_env("AUTH_USERNAME", "admin"),
-    auth_password_hash=_env("AUTH_PASSWORD_HASH", _sha256("hackaton2026")),
+    db_path=_env("DB_PATH", "/app/data/platform.db"),
 )
