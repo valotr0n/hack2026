@@ -5,7 +5,6 @@ import csv
 import inspect
 import json
 import logging
-import math
 import re
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -292,118 +291,33 @@ def _encode_texts(
     return embeddings.tolist()
 
 
-def _normalize_embedding(embedding: list[float]) -> list[float]:
-    norm = math.sqrt(sum(value * value for value in embedding))
-    if norm <= 0:
-        return embedding
-    return [value / norm for value in embedding]
-
-
-def _batched(items: list[str], batch_size: int) -> list[list[str]]:
-    size = max(1, batch_size)
-    return [items[index:index + size] for index in range(0, len(items), size)]
-
-
-def resolve_requested_embedding_backend(contour: str | None) -> EmbeddingBackend:
-    return "open" if (contour or "").strip().lower() == "open" else "local"
-
-
-async def _fetch_open_embedding_batch(
-    open_embedder_client: AsyncOpenAI,
-    texts: list[str],
-) -> list[list[float]]:
-    response = await open_embedder_client.embeddings.create(
-        model=settings.open_embedder_model,
-        input=texts,
-    )
-    data = sorted(response.data, key=lambda item: getattr(item, "index", 0))
-    embeddings: list[list[float]] = []
-    for item in data:
-        raw_embedding = list(item.embedding or [])
-        if not raw_embedding:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Open embedder returned an empty vector.",
-            )
-        embeddings.append(_normalize_embedding([float(value) for value in raw_embedding]))
-    return embeddings
-
-
 async def fetch_embeddings(
-    backend: EmbeddingBackend,
+    embedding_model: SentenceTransformer,
     texts: list[str],
-    embedding_model: SentenceTransformer | None = None,
-    open_embedder_client: AsyncOpenAI | None = None,
     prompt_name: EmbeddingPromptName | None = None,
 ) -> list[list[float]]:
     if not texts:
         return []
 
     started_at = perf_counter()
-    if backend == "open":
-        if open_embedder_client is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Open embedder client is not configured.",
-            )
-
-        batches = _batched(texts, settings.open_embedding_batch_size)
-        batch_results: list[list[list[float]] | None] = [None] * len(batches)
-        semaphore = asyncio.Semaphore(max(1, settings.open_embedding_concurrency))
-
-        async def _embed_batch(index: int, batch: list[str]) -> None:
-            async with semaphore:
-                try:
-                    batch_results[index] = await _fetch_open_embedding_batch(
-                        open_embedder_client,
-                        batch,
-                    )
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Open embedding generation failed: {exc}",
-                    ) from exc
-
-        await asyncio.gather(
-            *(_embed_batch(index, batch) for index, batch in enumerate(batches))
+    try:
+        embeddings = await asyncio.to_thread(
+            _encode_texts,
+            embedding_model,
+            texts,
+            prompt_name,
         )
-        embeddings = [
-            embedding
-            for batch in batch_results
-            for embedding in (batch or [])
-        ]
-        logger.info(
-            "Embeddings generated: backend=open texts=%d batches=%d concurrency=%d total=%.2fs",
-            len(texts),
-            len(batches),
-            max(1, settings.open_embedding_concurrency),
-            perf_counter() - started_at,
-        )
-    else:
-        if embedding_model is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Local embedding model is not configured.",
-            )
-
-        try:
-            embeddings = await asyncio.to_thread(
-                _encode_texts,
-                embedding_model,
-                texts,
-                prompt_name,
-            )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Local embedding generation failed: {exc}",
-            ) from exc
-        logger.info(
-            "Embeddings generated: backend=local texts=%d batch_size=%d total=%.2fs",
-            len(texts),
-            settings.embedding_batch_size,
-            perf_counter() - started_at,
-        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Local embedding generation failed: {exc}",
+        ) from exc
+    logger.info(
+        "Embeddings generated: backend=local texts=%d batch_size=%d total=%.2fs",
+        len(texts),
+        settings.embedding_batch_size,
+        perf_counter() - started_at,
+    )
 
     if len(embeddings) != len(texts):
         raise HTTPException(
@@ -481,7 +395,6 @@ async def _upsert_qdrant_points_via_rest(
     embeddings: list[list[float]],
     filename: str,
     source_id: str,
-    embedding_backend: EmbeddingBackend,
 ) -> None:
     points = [
         {
@@ -492,7 +405,7 @@ async def _upsert_qdrant_points_via_rest(
                 "source": filename,
                 "chunk_index": index,
                 "source_id": source_id,
-                "embedding_backend": embedding_backend,
+                "embedding_backend": "local",
             },
         }
         for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
@@ -509,7 +422,6 @@ async def create_document_collection(
     filename: str,
     chunks: list[str],
     embeddings: list[list[float]],
-    embedding_backend: EmbeddingBackend,
     notebook_id: str | None = None,
     source_id: str | None = None,
 ) -> str:
@@ -519,20 +431,24 @@ async def create_document_collection(
     if not await _collection_exists(collection_id):
         await _create_qdrant_collection_via_rest(collection_id, embedding_dimension)
     else:
+        existing_backend = await get_collection_embedding_backend(collection_id)
+        if existing_backend == "open":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Блокнот был проиндексирован внешним эмбеддером. "
+                    "Очистите источники и загрузите их заново после перехода на локальный режим."
+                ),
+            )
         current_vector_size = await get_collection_vector_size(collection_id)
         if current_vector_size is not None and current_vector_size != embedding_dimension:
-            existing_backend = await get_collection_embedding_backend(collection_id)
-            if existing_backend is None:
-                await delete_collection(collection_id)
-                await _create_qdrant_collection_via_rest(collection_id, embedding_dimension)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "Коллекция уже использует другой embedding backend. "
-                        "Очистите блокнот или верните исходный контур."
-                    ),
-                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Коллекция использует несовместимый размер векторов. "
+                    "Очистите блокнот и загрузите источники заново."
+                ),
+            )
 
     await _upsert_qdrant_points_via_rest(
         collection_id,
@@ -540,7 +456,6 @@ async def create_document_collection(
         embeddings,
         filename,
         sid,
-        embedding_backend,
     )
     return collection_id
 

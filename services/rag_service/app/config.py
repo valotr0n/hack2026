@@ -51,36 +51,10 @@ def _default_vision_max_images_per_document() -> int:
     return 3
 
 
-def _default_open_embedding_batch_size() -> int:
-    cpus = _available_cpus()
-    if cpus >= 24:
-        return 256
-    if cpus >= 12:
-        return 128
-    return 64
-
-
-def _default_open_embedding_concurrency() -> int:
-    cpus = _available_cpus()
-    if cpus >= 24:
-        return 4
-    if cpus >= 12:
-        return 2
-    return 1
-
-
 class Settings(BaseSettings):
     llm_base_url: str = "https://hackai.centrinvest.ru:6630/v1"
     llm_api_key: str = "hackaton2026"
     llm_model: str = "gpt-oss-20b"
-    open_embedder_base_url: str = "https://hackai.centrinvest.ru:6620/v1"
-    open_embedder_api_key: str = os.getenv("OPEN_EMBEDDER_API_KEY") or os.getenv("LLM_API_KEY") or "hackaton2026"
-    open_embedder_model: str = "Qwen3-Embedding-0.6B"
-    open_embedding_timeout_seconds: float = 120.0
-    open_embedding_max_connections: int = 128
-    open_embedding_max_keepalive_connections: int = 32
-    open_embedding_batch_size: int = _default_open_embedding_batch_size()
-    open_embedding_concurrency: int = _default_open_embedding_concurrency()
     embedder_model: str = "ai-forever/ru-en-RoSBERTa"
     qdrant_url: str = "http://qdrant:6333"
     chunk_size: int = 1024

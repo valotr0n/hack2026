@@ -9,7 +9,6 @@ from ..rag import (
     create_llm_stream,
     fetch_embeddings,
     get_collection_embedding_backend,
-    resolve_requested_embedding_backend,
     search_document_chunks,
     stream_chat_response,
 )
@@ -30,29 +29,22 @@ async def chat(
             detail="Query must not be empty.",
         )
 
-    requested_backend = resolve_requested_embedding_backend(request.headers.get("x-contour"))
     collection_backend = await get_collection_embedding_backend(payload.doc_id)
-    if collection_backend is not None and collection_backend != requested_backend:
+    if collection_backend == "open":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Блокнот индексирован в другом контуре. "
-                "Верните исходный контур или пересоберите индекс после очистки источников."
+                "Блокнот был проиндексирован внешним эмбеддером. "
+                "Очистите источники и загрузите их заново после перехода на локальный режим."
             ),
         )
 
-    embedding_backend = collection_backend or requested_backend
-    embedding_model = request.app.state.embedding_model if embedding_backend == "local" else None
-    open_embedder_client = (
-        request.app.state.open_embedder_client if embedding_backend == "open" else None
-    )
+    embedding_model = request.app.state.embedding_model
     query_embedding = (
         await fetch_embeddings(
-            embedding_backend,
+            embedding_model,
             [payload.query],
-            embedding_model=embedding_model,
-            open_embedder_client=open_embedder_client,
-            prompt_name="search_query" if embedding_backend == "local" else None,
+            prompt_name="search_query",
         )
     )[0]
     chunks = await search_document_chunks(

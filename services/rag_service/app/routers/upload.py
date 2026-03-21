@@ -11,7 +11,6 @@ from ..rag import (
     extract_text_from_upload,
     fetch_embeddings,
     get_collection_embedding_backend,
-    resolve_requested_embedding_backend,
     split_text_into_chunks,
 )
 from ..schemas import UploadResponse
@@ -29,22 +28,17 @@ async def upload_document(
     started_at = perf_counter()
     source_id = str(uuid4())
     filename = file.filename or "document"
-    requested_backend = resolve_requested_embedding_backend(request.headers.get("x-contour"))
     existing_backend = await get_collection_embedding_backend(notebook_id) if notebook_id else None
-    if existing_backend is not None and existing_backend != requested_backend:
+    if existing_backend == "open":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Блокнот уже индексирован в другом контуре. "
-                "Очистите источники или верните исходный контур перед новой загрузкой."
+                "Блокнот был проиндексирован внешним эмбеддером. "
+                "Очистите источники и загрузите их заново после перехода на локальный режим."
             ),
         )
 
-    embedding_backend = existing_backend or requested_backend
-    embedding_model = request.app.state.embedding_model if embedding_backend == "local" else None
-    open_embedder_client = (
-        request.app.state.open_embedder_client if embedding_backend == "open" else None
-    )
+    embedding_model = request.app.state.embedding_model
 
     extract_started_at = perf_counter()
     full_text = await extract_text_from_upload(file)
@@ -56,11 +50,9 @@ async def upload_document(
 
     embed_started_at = perf_counter()
     embeddings = await fetch_embeddings(
-        embedding_backend,
+        embedding_model,
         chunks,
-        embedding_model=embedding_model,
-        open_embedder_client=open_embedder_client,
-        prompt_name="search_document" if embedding_backend == "local" else None,
+        prompt_name="search_document",
     )
     embed_elapsed = perf_counter() - embed_started_at
 
@@ -70,7 +62,6 @@ async def upload_document(
         filename=filename,
         chunks=chunks,
         embeddings=embeddings,
-        embedding_backend=embedding_backend,
         notebook_id=notebook_id,
         source_id=source_id,
     )
@@ -78,10 +69,9 @@ async def upload_document(
 
     total_elapsed = perf_counter() - started_at
     logger.info(
-        "Upload processed: filename=%s notebook_id=%s backend=%s chars=%d chunks=%d timings extract=%.2fs chunk=%.2fs embed=%.2fs index=%.2fs total=%.2fs",
+        "Upload processed: filename=%s notebook_id=%s backend=local chars=%d chunks=%d timings extract=%.2fs chunk=%.2fs embed=%.2fs index=%.2fs total=%.2fs",
         filename,
         notebook_id or "-",
-        embedding_backend,
         len(full_text),
         len(chunks),
         extract_elapsed,
