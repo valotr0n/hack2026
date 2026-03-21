@@ -23,7 +23,6 @@ def _load_model() -> None:
         speaker="v3_1_ru",
         trust_repo=True,
     )
-    model.eval()
     _model = model
 
 
