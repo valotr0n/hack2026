@@ -53,6 +53,8 @@ services:
       LLM_MODEL: ${LLM_MODEL}
       STT_BASE_URL: ${STT_BASE_URL}
       STT_API_KEY: ${STT_API_KEY}
+      STT_MODE: ${STT_MODE:-auto}
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
       TTS_VOICE_ALEX: ${TTS_VOICE_ALEX}
       TTS_VOICE_MARIA: ${TTS_VOICE_MARIA}
       AUDIO_DIR: /app/audio

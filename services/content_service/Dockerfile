@@ -24,6 +24,12 @@ import torch; \
 torch.hub.load('snakers4/silero-models', 'silero_tts', language='ru', speaker='v3_1_ru', trust_repo=True); \
 print('Silero TTS model downloaded OK')"
 
+# Предзагружаем Whisper small (244MB) — офлайн STT
+RUN python -c "\
+from faster_whisper import WhisperModel; \
+WhisperModel('small', device='cpu', compute_type='int8'); \
+print('Whisper small model downloaded OK')"
+
 COPY app /app/app
 
 EXPOSE 8002
