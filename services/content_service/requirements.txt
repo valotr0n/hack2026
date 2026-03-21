@@ -1,9 +1,10 @@
 fastapi==0.115.13
 uvicorn[standard]==0.34.0
 openai==1.57.0
+httpx==0.28.1
 pydub==0.25.1
 aiofiles==24.1.0
 python-multipart==0.0.12
-httpx==0.28.1
-faster-whisper==1.1.1
 omegaconf>=2.3,<3.0
+requests>=2.31,<3.0
+faster-whisper==1.1.1
