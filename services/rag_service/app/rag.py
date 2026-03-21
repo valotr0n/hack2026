@@ -468,6 +468,7 @@ async def create_llm_stream(
 
 
 async def stream_chat_response(stream: Any, sources: list[str]) -> AsyncIterator[str]:
+    first = True
     try:
         async for chunk in stream:
             choices = getattr(chunk, "choices", None) or []
@@ -478,10 +479,11 @@ async def stream_chat_response(stream: Any, sources: list[str]) -> AsyncIterator
             if not delta:
                 continue
 
-            payload = json.dumps(
-                {"delta": delta, "sources": sources},
-                ensure_ascii=False,
-            )
+            if first:
+                payload = json.dumps({"delta": delta, "sources": sources}, ensure_ascii=False)
+                first = False
+            else:
+                payload = json.dumps({"delta": delta}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
     except Exception as exc:
         error_payload = json.dumps(
