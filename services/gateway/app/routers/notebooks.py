@@ -116,7 +116,13 @@ class PodcastRequest(BaseModel):
 
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
 
-@router.post("", response_model=NotebookResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=NotebookResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать блокнот",
+    description="Создаёт новый пустой блокнот. После создания загружайте в него документы через `/notebooks/{id}/sources`.",
+)
 async def create(
     req: CreateNotebookRequest,
     user_id: str = Depends(require_auth),
@@ -125,7 +131,12 @@ async def create(
     return NotebookResponse(**notebook)
 
 
-@router.get("", response_model=list[NotebookResponse])
+@router.get(
+    "",
+    response_model=list[NotebookResponse],
+    summary="Список блокнотов",
+    description="Возвращает все блокноты текущего пользователя вместе со списком источников в каждом.",
+)
 async def list_all(user_id: str = Depends(require_auth)) -> list[NotebookResponse]:
     notebooks = await list_notebooks(settings.db_path, user_id)
     result = []
@@ -135,7 +146,12 @@ async def list_all(user_id: str = Depends(require_auth)) -> list[NotebookRespons
     return result
 
 
-@router.get("/{notebook_id}", response_model=NotebookResponse)
+@router.get(
+    "/{notebook_id}",
+    response_model=NotebookResponse,
+    summary="Получить блокнот",
+    description="Возвращает блокнот по ID со списком загруженных источников.",
+)
 async def get_one(
     notebook_id: str,
     user_id: str = Depends(require_auth),
@@ -145,7 +161,12 @@ async def get_one(
     return NotebookResponse(**notebook, sources=sources)
 
 
-@router.patch("/{notebook_id}", response_model=NotebookResponse)
+@router.patch(
+    "/{notebook_id}",
+    response_model=NotebookResponse,
+    summary="Переименовать блокнот",
+    description="Обновляет название блокнота.",
+)
 async def update(
     notebook_id: str,
     req: UpdateNotebookRequest,
@@ -158,7 +179,12 @@ async def update(
     return NotebookResponse(**notebook, sources=sources)
 
 
-@router.delete("/{notebook_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{notebook_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить блокнот",
+    description="Удаляет блокнот, все его источники и векторные данные из базы.",
+)
 async def delete(
     notebook_id: str,
     request: Request,
@@ -176,7 +202,12 @@ async def delete(
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 
-@router.post("/{notebook_id}/sources", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{notebook_id}/sources",
+    status_code=status.HTTP_201_CREATED,
+    summary="Загрузить документ",
+    description="Загружает файл (PDF, DOCX, TXT) в блокнот. Документ автоматически разбивается на чанки и индексируется для поиска. Возвращает `id` источника.",
+)
 async def upload_source(
     notebook_id: str,
     request: Request,
@@ -208,7 +239,12 @@ async def upload_source(
     )
 
 
-@router.delete("/{notebook_id}/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{notebook_id}/sources/{source_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить источник",
+    description="Удаляет конкретный документ из блокнота вместе с его векторными данными.",
+)
 async def remove_source(
     notebook_id: str,
     source_id: str,
@@ -230,7 +266,30 @@ async def remove_source(
 
 # ── Chat (SSE stream) ─────────────────────────────────────────────────────────
 
-@router.post("/{notebook_id}/chat")
+@router.post(
+    "/{notebook_id}/chat",
+    summary="Чат с документами",
+    description="""
+Задаёт вопрос по содержимому блокнота. Возвращает **SSE-стрим** (Server-Sent Events).
+
+**Формат каждого события:**
+```
+data: {"delta": "фрагмент текста", "sources": ["текст чанка 1", ...]}
+```
+
+**Завершение стрима:**
+```
+data: [DONE]
+```
+
+**Пример на JS:**
+```js
+const es = new EventSource('/notebooks/{id}/chat'); // или через fetch с ReadableStream
+```
+
+Поле `history` — массив предыдущих сообщений для контекста диалога. При первом вопросе передавайте пустой массив.
+    """,
+)
 async def chat(
     notebook_id: str,
     req: ChatRequest,
@@ -271,7 +330,22 @@ async def chat(
 
 # ── Content generation ────────────────────────────────────────────────────────
 
-@router.post("/{notebook_id}/summary")
+@router.post(
+    "/{notebook_id}/summary",
+    summary="Создать саммари",
+    description="""
+Генерирует краткое изложение всех документов в блокноте.
+
+**Параметр `style`:**
+- `official` — деловой стиль (по умолчанию)
+- `popular` — простым языком
+
+**Ответ:**
+```json
+{"summary": "Текст краткого изложения..."}
+```
+    """,
+)
 async def summary(
     notebook_id: str,
     req: SummaryRequest,
@@ -290,7 +364,29 @@ async def summary(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
-@router.post("/{notebook_id}/mindmap")
+@router.post(
+    "/{notebook_id}/mindmap",
+    summary="Создать mindmap",
+    description="""
+Генерирует структуру mindmap по содержимому блокнота.
+
+**Ответ** — дерево в JSON:
+```json
+{
+  "title": "Главная тема",
+  "children": [
+    {
+      "title": "Подтема 1",
+      "children": [
+        {"title": "Пункт 1.1", "children": []},
+        {"title": "Пункт 1.2", "children": []}
+      ]
+    }
+  ]
+}
+```
+    """,
+)
 async def mindmap(
     notebook_id: str,
     request: Request,
@@ -308,7 +404,25 @@ async def mindmap(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
-@router.post("/{notebook_id}/flashcards")
+@router.post(
+    "/{notebook_id}/flashcards",
+    summary="Создать карточки",
+    description="""
+Генерирует флэш-карточки для запоминания материала из блокнота.
+
+**Параметр `count`** — количество карточек (1–50, по умолчанию 10).
+
+**Ответ:**
+```json
+{
+  "flashcards": [
+    {"question": "Что такое RAG?", "answer": "Retrieval-Augmented Generation — подход..."},
+    ...
+  ]
+}
+```
+    """,
+)
 async def flashcards(
     notebook_id: str,
     req: FlashcardsRequest,
@@ -327,7 +441,25 @@ async def flashcards(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
-@router.post("/{notebook_id}/podcast")
+@router.post(
+    "/{notebook_id}/podcast",
+    summary="Создать подкаст",
+    description="""
+Генерирует аудиоподкаст — диалог двух ведущих (Алекс и Мария) по материалам блокнота.
+
+**Параметр `tone`:**
+- `popular` — живой разговорный стиль (по умолчанию)
+- `scientific` — академический стиль
+
+**Ответ:**
+```json
+{"audio_url": "/audio/abc123.mp3"}
+```
+
+Для воспроизведения запросите файл: `GET /audio/{filename}`.
+Генерация занимает **30–120 секунд** в зависимости от объёма текста.
+    """,
+)
 async def podcast(
     notebook_id: str,
     req: PodcastRequest,
