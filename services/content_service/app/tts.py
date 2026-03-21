@@ -36,17 +36,18 @@ async def _get_model():
 
 
 def _synthesize_sync(text: str, speaker: str, output_path: str) -> None:
-    audio = _model.apply_tts(text=text, speaker=speaker, sample_rate=SAMPLE_RATE)
-    import torchaudio
+    import io
+    import numpy as np
+    import scipy.io.wavfile
     from pydub import AudioSegment
 
-    wav_path = output_path.replace(".mp3", ".wav")
-    torchaudio.save(wav_path, audio.unsqueeze(0), SAMPLE_RATE, format="wav")
-    AudioSegment.from_wav(wav_path).export(output_path, format="mp3")
-    try:
-        os.remove(wav_path)
-    except FileNotFoundError:
-        pass
+    audio = _model.apply_tts(text=text, speaker=speaker, sample_rate=SAMPLE_RATE)
+    audio_np = (audio.numpy() * 32767).astype(np.int16)
+
+    buf = io.BytesIO()
+    scipy.io.wavfile.write(buf, SAMPLE_RATE, audio_np)
+    buf.seek(0)
+    AudioSegment.from_wav(buf).export(output_path, format="mp3")
 
 
 async def synthesize(text: str, speaker: str, output_path: str) -> None:
