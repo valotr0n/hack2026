@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ContractRequest(BaseModel):
@@ -46,9 +48,84 @@ _VERIFY_SYSTEM = (
 
 
 def _parse_contract(raw: str) -> dict:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
     start = raw.find("{")
     end = raw.rfind("}") + 1
     return json.loads(raw[start:end])
+
+
+def _stringify(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [_stringify(value)] if _stringify(value) else []
+    if isinstance(value, list):
+        return [_stringify(item) for item in value if _stringify(item)]
+    return [_stringify(value)] if _stringify(value) else []
+
+
+def _normalize_obligation_item(value: object) -> Obligation | None:
+    if isinstance(value, Obligation):
+        return value
+
+    if isinstance(value, dict):
+        party = _stringify(value.get("party"))
+        text = _stringify(value.get("text"))
+        if not text and len(value) == 1:
+            key, item = next(iter(value.items()))
+            party = party or _stringify(key)
+            text = _stringify(item)
+        if not text:
+            return None
+        return Obligation(party=party or "Не указано", text=text)
+
+    text = _stringify(value)
+    if not text:
+        return None
+
+    for separator in ("—", " - ", ":", ";"):
+        if separator in text:
+            party, obligation_text = text.split(separator, 1)
+            party = _stringify(party)
+            obligation_text = _stringify(obligation_text)
+            if obligation_text:
+                return Obligation(party=party or "Не указано", text=obligation_text)
+
+    return Obligation(party="Не указано", text=text)
+
+
+def _normalize_obligations(value: object) -> list[Obligation]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    obligations: list[Obligation] = []
+    for item in items:
+        obligation = _normalize_obligation_item(item)
+        if obligation is not None:
+            obligations.append(obligation)
+    return obligations
+
+
+def _normalize_contract_payload(data: dict) -> ContractResponse:
+    return ContractResponse(
+        parties=_normalize_string_list(data.get("parties")),
+        subject=_stringify(data.get("subject")),
+        key_conditions=_normalize_string_list(data.get("key_conditions")),
+        obligations=_normalize_obligations(data.get("obligations")),
+        risks=_normalize_string_list(data.get("risks")),
+        deadlines=_normalize_string_list(data.get("deadlines")),
+        penalties=_normalize_string_list(data.get("penalties")),
+    )
 
 
 @router.post(
@@ -103,8 +180,15 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
 
     try:
         data = _parse_contract(raw1)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Contract extract parse failed: %s; raw=%r", exc, raw1[:1200])
         raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 1)")
+
+    try:
+        extracted = _normalize_contract_payload(data)
+    except Exception as exc:
+        logger.warning("Contract extract normalization failed: %s; data=%r", exc, data)
+        raise HTTPException(status_code=500, detail="Не удалось нормализовать ответ модели (проход 1)")
 
     # Проход 2: верификация
     verify_user = (
@@ -112,7 +196,7 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         f"{req.text}\n\n"
         "---\n"
         "Извлечённые данные:\n"
-        f"{json.dumps(data, ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(extracted.model_dump(), ensure_ascii=False, indent=2)}\n\n"
         "Удали из каждого поля всё, что явно не подтверждается текстом выше. "
         f"Верни исправленный JSON в том же формате:\n{fmt}"
     )
@@ -125,14 +209,11 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
 
     try:
         verified = _parse_contract(raw2)
-        return ContractResponse(
-            parties=verified.get("parties", []),
-            subject=verified.get("subject", ""),
-            key_conditions=verified.get("key_conditions", []),
-            obligations=[Obligation(**o) for o in verified.get("obligations", [])],
-            risks=verified.get("risks", []),
-            deadlines=verified.get("deadlines", []),
-            penalties=verified.get("penalties", []),
+        return _normalize_contract_payload(verified)
+    except Exception as exc:
+        logger.warning(
+            "Contract verify parse/normalization failed: %s; returning extract pass result; raw=%r",
+            exc,
+            raw2[:1200],
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 2)")
+        return extracted
