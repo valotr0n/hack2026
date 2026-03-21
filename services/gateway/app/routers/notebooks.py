@@ -161,6 +161,97 @@ async def _notebook_response(notebook_id: str, user_id: str) -> "NotebookRespons
     return NotebookResponse(**notebook, sources=sources)
 
 
+def _resolve_presentation_title(request_title: str, notebook_title: str) -> str:
+    title = request_title.strip()
+    return title if title else notebook_title
+
+
+def _cached_presentation_slides(notebook: dict[str, Any], title: str, style: str) -> list[dict] | None:
+    cached = notebook.get("presentation")
+    if not isinstance(cached, dict):
+        return None
+
+    slides = cached.get("slides")
+    if not isinstance(slides, list):
+        return None
+
+    if cached.get("title") != title or cached.get("style") != style:
+        return None
+
+    return slides
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+_PRESENTATION_DOMAIN_RULES: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    (
+        "legal",
+        ("договор", "судебный документ"),
+        ("договор", "соглаш", "иск", "арбитраж", "суд", "неустой", "обязатель", "сторон", "право"),
+    ),
+    (
+        "finance",
+        ("отчёт",),
+        ("банк", "кредит", "заем", "ставк", "выручк", "прибыл", "ebitda", "денежн", "бюджет", "финанс"),
+    ),
+    (
+        "research",
+        ("научная статья",),
+        ("исслед", "метод", "гипотез", "выборк", "эксперимент", "результат", "науч", "статист"),
+    ),
+    (
+        "operations",
+        ("инструкция",),
+        ("инструк", "регламент", "процесс", "процедур", "этап", "чек-лист", "внедрен", "sla"),
+    ),
+    (
+        "briefing",
+        ("новость", "письмо"),
+        ("новост", "обновлен", "анонс", "письмо", "меморандум", "пресс", "релиз"),
+    ),
+    (
+        "education",
+        ("книга",),
+        ("курс", "лекц", "глава", "учеб", "объяснен", "понят", "пример"),
+    ),
+]
+
+
+def _infer_presentation_domain(notebook_title: str, doc_types: list[str], tags: list[str]) -> str:
+    text = " ".join([notebook_title, *doc_types, *tags]).lower()
+    for domain, matched_doc_types, keywords in _PRESENTATION_DOMAIN_RULES:
+        if any(doc_type in matched_doc_types for doc_type in doc_types):
+            return domain
+        if any(keyword in text for keyword in keywords):
+            return domain
+    return "general"
+
+
+async def _presentation_context(notebook_id: str, notebook_title: str) -> dict[str, Any]:
+    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
+    doc_types = _unique_preserve_order(
+        [str(source.get("doc_type", "")).strip() for source in sources if source.get("doc_type")]
+    )[:4]
+    tags = _unique_preserve_order(
+        [str(tag).strip() for source in sources for tag in (source.get("tags") or []) if str(tag).strip()]
+    )[:8]
+    return {
+        "domain": _infer_presentation_domain(notebook_title, doc_types, tags),
+        "doc_types": doc_types,
+        "tags": tags,
+    }
+
+
 # ── schemas ───────────────────────────────────────────────────────────────────
 
 class CreateNotebookRequest(BaseModel):
@@ -1508,6 +1599,7 @@ async def compare_sources(
 Генерирует структуру слайдов в JSON — для отображения превью в браузере перед скачиванием.
 
 **Параметр `style`:** `business` · `academic` · `popular`
+Тон подачи задаётся явно, а доменная тема и структура определяются автоматически по содержанию источников.
 
 **Ответ:**
 ```json
@@ -1526,20 +1618,56 @@ async def presentation_preview(
     req: PresentationRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
-    notebook = await _owned_notebook(notebook_id, user_id)
+    notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    resolved_title = _resolve_presentation_title(req.title, notebook["title"])
+    cached_slides = _cached_presentation_slides(notebook, resolved_title, req.style)
+    if cached_slides is not None and not force:
+        cached = notebook.get("presentation")
+        if isinstance(cached, dict):
+            return {
+                "slides": cached_slides,
+                "domain": cached.get("domain", "general"),
+                "doc_types": cached.get("doc_types", []),
+                "tags": cached.get("tags", []),
+            }
+        return {"slides": cached_slides}
+
+    presentation_context = await _presentation_context(notebook_id, notebook["title"])
+    text = await _notebook_text(client, notebook_id, max_length=settings.presentation_max_text_length)
 
     try:
         resp = await client.post(
             _content("/presentation/preview"),
-            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            json={
+                "text": text,
+                "title": resolved_title,
+                "style": req.style,
+                **presentation_context,
+            },
             headers=_contour_headers(notebook),
+            timeout=300.0,
         )
         resp.raise_for_status()
         data = resp.json()
-        await save_notebook_content(settings.db_path, notebook_id, "presentation", _json.dumps(data, ensure_ascii=False))
+        await save_notebook_content(
+            settings.db_path,
+            notebook_id,
+            "presentation",
+            _json.dumps(
+                {
+                    "slides": data.get("slides", []),
+                    "title": resolved_title,
+                    "style": req.style,
+                    "domain": data.get("domain", presentation_context["domain"]),
+                    "doc_types": presentation_context["doc_types"],
+                    "tags": presentation_context["tags"],
+                },
+                ensure_ascii=False,
+            ),
+        )
         return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
@@ -1550,9 +1678,10 @@ async def presentation_preview(
     summary="Скачать презентацию (PPTX)",
     description="""
 Генерирует и возвращает готовый файл `.pptx` для скачивания.
-Презентация оформлена в корпоративном стиле (тёмно-синий + золотой).
+Оформление и структура зависят от домена документа, а `style` задаёт тон подачи.
 
 **Параметр `style`:** `business` · `academic` · `popular`
+Тон подачи задаётся явно, а доменная тема и структура определяются автоматически по содержанию источников.
 
 Возвращает бинарный файл `presentation.pptx`.
     """,
@@ -1562,17 +1691,69 @@ async def presentation_download(
     req: PresentationRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> StreamingResponse:
-    notebook = await _owned_notebook(notebook_id, user_id)
+    notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    resolved_title = _resolve_presentation_title(req.title, notebook["title"])
+    slides = _cached_presentation_slides(notebook, resolved_title, req.style)
+    presentation_context = await _presentation_context(notebook_id, notebook["title"])
+    domain = presentation_context["domain"]
+
+    if slides is None or force:
+        text = await _notebook_text(client, notebook_id, max_length=settings.presentation_max_text_length)
+        try:
+            preview_resp = await client.post(
+                _content("/presentation/preview"),
+                json={
+                    "text": text,
+                    "title": resolved_title,
+                    "style": req.style,
+                    **presentation_context,
+                },
+                headers=_contour_headers(notebook),
+                timeout=300.0,
+            )
+            preview_resp.raise_for_status()
+            preview_data = preview_resp.json()
+            slides = preview_data.get("slides", [])
+            domain = preview_data.get("domain", domain)
+            await save_notebook_content(
+                settings.db_path,
+                notebook_id,
+                "presentation",
+                _json.dumps(
+                    {
+                        "slides": slides,
+                        "title": resolved_title,
+                        "style": req.style,
+                        "domain": domain,
+                        "doc_types": presentation_context["doc_types"],
+                        "tags": presentation_context["tags"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    else:
+        cached = notebook.get("presentation")
+        if isinstance(cached, dict):
+            domain = str(cached.get("domain") or domain)
 
     try:
         resp = await client.post(
             _content("/presentation/download"),
-            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            json={
+                "title": resolved_title,
+                "style": req.style,
+                "slides": slides,
+                "domain": domain,
+                "doc_types": presentation_context["doc_types"],
+                "tags": presentation_context["tags"],
+            },
             headers=_contour_headers(notebook),
-            timeout=120.0,
+            timeout=300.0,
         )
         resp.raise_for_status()
     except httpx.RequestError as exc:

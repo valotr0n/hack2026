@@ -44,6 +44,7 @@ class Settings:
     contract_verify_max_tokens: int = _env_int("CONTRACT_VERIFY_MAX_TOKENS", 1200)
     questions_max_tokens: int = _env_int("QUESTIONS_MAX_TOKENS", 1000)
     compare_max_tokens: int = _env_int("COMPARE_MAX_TOKENS", 1400)
+    presentation_max_tokens: int = _env_int("PRESENTATION_MAX_TOKENS", 1200)
 
 
 settings = Settings()

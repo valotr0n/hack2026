@@ -23,6 +23,7 @@ class Settings:
     timeline_max_text_length: int
     questions_max_text_length: int
     compare_max_text_length: int
+    presentation_max_text_length: int
     gateway_max_connections: int
     gateway_max_keepalive_connections: int
     http_port: int
@@ -42,6 +43,7 @@ settings = Settings(
     timeline_max_text_length=int(_env("TIMELINE_MAX_TEXT_LENGTH", "12000")),
     questions_max_text_length=int(_env("QUESTIONS_MAX_TEXT_LENGTH", "14000")),
     compare_max_text_length=int(_env("COMPARE_MAX_TEXT_LENGTH", "12000")),
+    presentation_max_text_length=int(_env("PRESENTATION_MAX_TEXT_LENGTH", "14000")),
     gateway_max_connections=int(_env("GATEWAY_MAX_CONNECTIONS", "200")),
     gateway_max_keepalive_connections=int(_env("GATEWAY_MAX_KEEPALIVE_CONNECTIONS", "50")),
     http_port=int(_env("GATEWAY_HTTP_PORT", "8000")),
