@@ -27,6 +27,7 @@ from ..database import (
     save_notebook_content,
     update_notebook_contour,
     update_notebook_title,
+    update_source_autotag,
 )
 
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
@@ -34,6 +35,7 @@ router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 # Максимальный объём текста для передачи в LLM (~20k символов ≈ 5k токенов)
 _MAX_TEXT_LENGTH = 20_000
 
+import asyncio
 import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
@@ -48,7 +50,58 @@ def _parse_notebook(nb: dict) -> dict:
     return nb
 
 
+def _parse_source(src: dict) -> dict:
+    """Десериализует JSON-колонку tags из SQLite."""
+    raw = src.get("tags")
+    if isinstance(raw, str):
+        try:
+            src["tags"] = _json.loads(raw)
+        except Exception:
+            src["tags"] = []
+    elif raw is None:
+        src["tags"] = []
+    return src
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+async def _autotag_source_bg(
+    client: httpx.AsyncClient,
+    db_path: str,
+    source_id: str,
+    notebook_id: str,
+    contour: str,
+) -> None:
+    """Фоновая задача: автотегирование источника после загрузки."""
+    try:
+        resp = await client.get(_rag(f"/notebook/{notebook_id}/content"))
+        resp.raise_for_status()
+        text = resp.json().get("text", "")[:500]
+        if not text.strip():
+            return
+        tag_resp = await client.post(
+            _content("/autotag"),
+            json={"text": text},
+            headers={"x-contour": contour},
+        )
+        tag_resp.raise_for_status()
+        data = tag_resp.json()
+        import json as _j
+        tags = data.get("tags", [])
+        if isinstance(tags, str):
+            try:
+                tags = _j.loads(tags)
+            except Exception:
+                tags = []
+        await update_source_autotag(
+            db_path,
+            source_id,
+            data.get("doc_type", "прочее"),
+            tags,
+        )
+    except Exception:
+        pass  # best-effort, не блокируем ответ пользователю
+
 
 def _rag(path: str) -> str:
     return f"{settings.rag_service_url.rstrip('/')}/{path.lstrip('/')}"
@@ -119,6 +172,8 @@ class SourceResponse(BaseModel):
     created_at: str
     status: str = "ready"   # processing | ready | error
     error: str | None = None
+    doc_type: str | None = None
+    tags: list[str] = []
 
 
 class NotebookListItem(BaseModel):
@@ -230,7 +285,7 @@ async def get_one(
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
     notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
-    sources = await list_sources(settings.db_path, notebook_id)
+    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
     return NotebookResponse(**notebook, sources=sources)
 
 
@@ -248,7 +303,7 @@ async def update(
     notebook = await _owned_notebook(notebook_id, user_id)
     await update_notebook_title(settings.db_path, notebook_id, req.title)
     notebook["title"] = req.title
-    sources = await list_sources(settings.db_path, notebook_id)
+    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
     return NotebookResponse(**notebook, sources=sources)
 
 
@@ -273,7 +328,7 @@ async def set_contour(
     notebook = await _owned_notebook(notebook_id, user_id)
     await update_notebook_contour(settings.db_path, notebook_id, req.contour)
     notebook = _parse_notebook(await get_notebook(settings.db_path, notebook_id))
-    sources = await list_sources(settings.db_path, notebook_id)
+    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
     return NotebookResponse(**notebook, sources=sources)
 
 
@@ -337,6 +392,9 @@ async def upload_source(
         status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
+    asyncio.create_task(_autotag_source_bg(
+        client, settings.db_path, source["id"], notebook_id, notebook.get("contour", "open")
+    ))
     return source
 
 
@@ -402,6 +460,9 @@ async def transcribe_source(
         status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
+    asyncio.create_task(_autotag_source_bg(
+        client, settings.db_path, source["id"], notebook_id, notebook.get("contour", "open")
+    ))
     return source
 
 
@@ -1151,3 +1212,55 @@ async def presentation_download(
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": f'attachment; filename="presentation.pptx"'},
     )
+
+
+@router.post(
+    "/{notebook_id}/autotag",
+    summary="Автотегирование документов блокнота",
+    description="""
+Определяет тип и теги документов в блокноте на основе их содержимого.
+
+**Ответ:**
+```json
+{
+  "doc_type": "договор",
+  "tags": ["кредитный договор", "ипотека", "Сбербанк"]
+}
+```
+
+**Типы документов:** договор · отчёт · инструкция · письмо · книга · судебный документ · научная статья · новость · прочее
+    """,
+)
+async def autotag_notebook(
+    notebook_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    notebook = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    try:
+        rag_resp = await client.get(_rag(f"/notebook/{notebook_id}/content"))
+        rag_resp.raise_for_status()
+        text = rag_resp.json().get("text", "")[:500]
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Блокнот пуст — загрузите хотя бы один источник",
+        )
+
+    try:
+        resp = await client.post(
+            _content("/autotag"),
+            json={"text": text},
+            headers=_contour_headers(notebook),
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))

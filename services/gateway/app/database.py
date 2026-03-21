@@ -54,6 +54,8 @@ async def init_db(path: str) -> None:
         for col, typedef in [
             ("status", "TEXT DEFAULT 'ready'"),
             ("error", "TEXT"),
+            ("doc_type", "TEXT"),
+            ("tags", "TEXT DEFAULT '[]'"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE sources ADD COLUMN {col} {typedef}")
@@ -245,7 +247,7 @@ async def list_sources(path: str, notebook_id: str) -> list[dict[str, Any]]:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, filename, chunks_count, created_at, status, error FROM sources WHERE notebook_id = ? ORDER BY created_at ASC",
+            "SELECT id, filename, chunks_count, created_at, status, error, doc_type, tags FROM sources WHERE notebook_id = ? ORDER BY created_at ASC",
             (notebook_id,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -255,11 +257,21 @@ async def get_source(path: str, source_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, notebook_id, filename, chunks_count, created_at, status, error FROM sources WHERE id = ?",
+            "SELECT id, notebook_id, filename, chunks_count, created_at, status, error, doc_type, tags FROM sources WHERE id = ?",
             (source_id,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def update_source_autotag(path: str, source_id: str, doc_type: str, tags: list) -> None:
+    import json
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute(
+            "UPDATE sources SET doc_type = ?, tags = ? WHERE id = ?",
+            (doc_type, json.dumps(tags, ensure_ascii=False), source_id),
+        )
+        await db.commit()
 
 
 async def delete_source(path: str, source_id: str) -> None:
