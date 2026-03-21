@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import inspect
 import json
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
@@ -37,6 +38,69 @@ SYSTEM_PROMPT = (
 )
 
 
+def _table_rows_to_text(headers: list[str], rows: list[list[str]]) -> str:
+    """Конвертирует табличные данные в читаемый текст для RAG-индексации."""
+    lines: list[str] = []
+    if headers:
+        lines.append("Колонки: " + ", ".join(str(h) for h in headers))
+        lines.append("")
+    for i, row in enumerate(rows, start=1):
+        if not any(str(cell).strip() for cell in row):
+            continue
+        if headers:
+            parts = [f"{str(h)}={str(v)}" for h, v in zip(headers, row) if str(v).strip()]
+        else:
+            parts = [str(v) for v in row if str(v).strip()]
+        if parts:
+            lines.append(f"Строка {i}: " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def _extract_text_from_csv(payload: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1251", "latin-1"):
+        try:
+            text_io = StringIO(payload.decode(encoding))
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV file encoding not supported. Use UTF-8 or Windows-1251.",
+        )
+
+    reader = csv.reader(text_io)
+    all_rows = [row for row in reader if any(cell.strip() for cell in row)]
+    if not all_rows:
+        return ""
+    headers = all_rows[0]
+    rows = all_rows[1:]
+    return _table_rows_to_text(headers, rows)
+
+
+def _extract_text_from_xlsx(payload: bytes) -> str:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(payload), read_only=True, data_only=True)
+    sheets_text: list[str] = []
+
+    for sheet in wb.worksheets:
+        all_rows = [
+            [str(cell.value) if cell.value is not None else "" for cell in row]
+            for row in sheet.iter_rows()
+            if any(cell.value is not None for cell in row)
+        ]
+        if not all_rows:
+            continue
+        headers = all_rows[0]
+        rows = all_rows[1:]
+        sheet_text = f"Лист: {sheet.title}\n{_table_rows_to_text(headers, rows)}"
+        sheets_text.append(sheet_text)
+
+    wb.close()
+    return "\n\n".join(sheets_text)
+
+
 async def extract_text_from_upload(file: UploadFile) -> str:
     filename = file.filename or "document"
     suffix = Path(filename).suffix.lower()
@@ -56,10 +120,14 @@ async def extract_text_from_upload(file: UploadFile) -> str:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="TXT files must be UTF-8 encoded.",
             ) from exc
+    elif suffix == ".csv":
+        text = _extract_text_from_csv(payload)
+    elif suffix in (".xlsx", ".xls"):
+        text = _extract_text_from_xlsx(payload)
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Use PDF, DOCX, or TXT.",
+            detail="Unsupported file type. Use PDF, DOCX, TXT, CSV, or XLSX.",
         )
 
     normalized_text = "\n".join(line for line in text.splitlines() if line.strip()).strip()
