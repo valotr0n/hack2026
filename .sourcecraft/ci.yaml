@@ -1,0 +1,40 @@
+on:
+  push:
+    - workflows: [deploy]
+      filter:
+        branches: ["main"]
+
+workflows:
+  deploy:
+    runs_on: self-hosted
+    settings:
+      max_cube_duration: 10m
+    tasks:
+      - deploy-task
+
+tasks:
+  - name: deploy-task
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    cubes:
+      - name: setup-ssh
+        script:
+          - mkdir -p ~/.ssh
+          - echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          - chmod 600 ~/.ssh/deploy_key
+          - ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+
+      - name: deploy
+        script:
+          - |
+            ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST "
+              set -e
+              cd /opt/hack2026
+
+              git pull origin main
+
+              docker compose pull --quiet
+              docker compose up -d --remove-orphans
+              docker compose ps
+            "

@@ -9,7 +9,9 @@
       "Bash(taskkill //PID 16828 //F 2)",
       "Bash(1 netstat:*)",
       "Bash(python:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "WebSearch",
+      "WebFetch(domain:sourcecraft.dev)"
     ]
   }
 }
