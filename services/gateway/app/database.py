@@ -41,6 +41,16 @@ async def init_db(path: str) -> None:
         await db.execute("PRAGMA busy_timeout = 10000")
         await db.executescript(_SCHEMA)
         # Миграции — добавляем колонки для кэша контента если их ещё нет
+        # Миграции sources
+        for col, typedef in [
+            ("status", "TEXT DEFAULT 'ready'"),
+            ("error", "TEXT"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE sources ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
+        # Миграции notebooks
         for col, typedef in [
             ("summary", "TEXT"),
             ("mindmap", "TEXT"),
@@ -184,14 +194,16 @@ async def create_source(
     path: str,
     notebook_id: str,
     filename: str,
-    chunks_count: int,
+    chunks_count: int = 0,
+    status: str = "processing",
+    source_id: str | None = None,
 ) -> dict[str, Any]:
-    sid = _new_id()
+    sid = source_id or _new_id()
     now = _now()
     async with aiosqlite.connect(path, timeout=30) as db:
         await db.execute(
-            "INSERT INTO sources (id, notebook_id, filename, chunks_count, created_at) VALUES (?, ?, ?, ?, ?)",
-            (sid, notebook_id, filename, chunks_count, now),
+            "INSERT INTO sources (id, notebook_id, filename, chunks_count, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, notebook_id, filename, chunks_count, now, status),
         )
         await db.commit()
     return {
@@ -200,14 +212,31 @@ async def create_source(
         "filename": filename,
         "chunks_count": chunks_count,
         "created_at": now,
+        "status": status,
+        "error": None,
     }
+
+
+async def update_source_status(
+    path: str,
+    source_id: str,
+    status: str,
+    chunks_count: int = 0,
+    error: str | None = None,
+) -> None:
+    async with aiosqlite.connect(path, timeout=30) as db:
+        await db.execute(
+            "UPDATE sources SET status = ?, chunks_count = ?, error = ? WHERE id = ?",
+            (status, chunks_count, error, source_id),
+        )
+        await db.commit()
 
 
 async def list_sources(path: str, notebook_id: str) -> list[dict[str, Any]]:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, filename, chunks_count, created_at FROM sources WHERE notebook_id = ? ORDER BY created_at ASC",
+            "SELECT id, filename, chunks_count, created_at, status, error FROM sources WHERE notebook_id = ? ORDER BY created_at ASC",
             (notebook_id,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -217,7 +246,7 @@ async def get_source(path: str, source_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, notebook_id, filename, chunks_count, created_at FROM sources WHERE id = ?",
+            "SELECT id, notebook_id, filename, chunks_count, created_at, status, error FROM sources WHERE id = ?",
             (source_id,),
         ) as cur:
             row = await cur.fetchone()
