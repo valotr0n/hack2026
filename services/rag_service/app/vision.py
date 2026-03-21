@@ -13,8 +13,9 @@ _load_error: str | None = None
 _lock = asyncio.Lock()
 
 _DESCRIBE_PROMPT = (
-    "Подробно опиши что изображено на этой схеме или изображении. "
-    "Если есть текст — извлеки его полностью. "
+    "Кратко и фактически опиши изображение или схему для RAG-индексации. "
+    "Перечисли только ключевые объекты, подписи и видимый текст. "
+    "Не додумывай и уложись в 3-5 коротких предложений. "
     "Отвечай на русском языке."
 )
 
@@ -151,11 +152,25 @@ def _extract_images_from_docx(payload: bytes) -> list[bytes]:
     return images
 
 
-async def preload_vision_model(model_id: str) -> None:
+def _build_warmup_image_bytes() -> bytes:
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (64, 64), color="white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+async def preload_vision_model(model_id: str, max_new_tokens: int, max_image_side: int) -> None:
     started_at = perf_counter()
     logger.info("Starting background preload of vision model: %s", model_id)
     try:
         await _get_vision_model(model_id)
+        await asyncio.to_thread(
+            _describe_sync,
+            _build_warmup_image_bytes(),
+            min(max_new_tokens, 16),
+            min(max_image_side, 256),
+        )
     except Exception as exc:
         logger.warning("Vision preload failed: %s", exc)
         return

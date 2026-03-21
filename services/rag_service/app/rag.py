@@ -239,6 +239,7 @@ def _encode_texts(
         "convert_to_numpy": True,
         "normalize_embeddings": True,
         "show_progress_bar": False,
+        "batch_size": settings.embedding_batch_size,
     }
     if prompt_name is not None:
         encode_kwargs["prompt_name"] = prompt_name

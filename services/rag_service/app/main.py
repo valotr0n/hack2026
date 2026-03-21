@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 
 import httpx
@@ -29,8 +30,29 @@ async def _close_resource(resource: object) -> None:
         await result
 
 
+def _configure_cpu_runtime() -> None:
+    import torch
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "true")
+
+    torch.set_num_threads(settings.torch_num_threads)
+    try:
+        torch.set_num_interop_threads(settings.torch_num_interop_threads)
+    except RuntimeError as exc:
+        logger.warning("Unable to set torch interop threads: %s", exc)
+
+    logger.info(
+        "Configured CPU runtime: cpus=%s torch_threads=%d interop_threads=%d embedding_batch_size=%d",
+        os.cpu_count() or 1,
+        settings.torch_num_threads,
+        settings.torch_num_interop_threads,
+        settings.embedding_batch_size,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _configure_cpu_runtime()
     embedding_model = SentenceTransformer(settings.embedder_model)
     llm_http_client = httpx.AsyncClient(verify=False, timeout=120.0)
     llm_client = AsyncOpenAI(
@@ -46,7 +68,11 @@ async def lifespan(app: FastAPI):
         from .vision import preload_vision_model
 
         vision_preload_task = asyncio.create_task(
-            preload_vision_model(settings.vision_model_id),
+            preload_vision_model(
+                settings.vision_model_id,
+                settings.vision_max_new_tokens,
+                settings.vision_max_image_side,
+            ),
             name="rag-service-vision-preload",
         )
         app.state.vision_preload_task = vision_preload_task

@@ -112,6 +112,12 @@ async def _notebook_text(
     return text
 
 
+async def _notebook_response(notebook_id: str, user_id: str) -> "NotebookResponse":
+    notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
+    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
+    return NotebookResponse(**notebook, sources=sources)
+
+
 # ── schemas ───────────────────────────────────────────────────────────────────
 
 class CreateNotebookRequest(BaseModel):
@@ -250,9 +256,7 @@ async def get_one(
     notebook_id: str,
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
-    notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
-    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
-    return NotebookResponse(**notebook, sources=sources)
+    return await _notebook_response(notebook_id, user_id)
 
 
 @router.patch(
@@ -266,11 +270,9 @@ async def update(
     req: UpdateNotebookRequest,
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
-    notebook = await _owned_notebook(notebook_id, user_id)
+    await _owned_notebook(notebook_id, user_id)
     await update_notebook_title(settings.db_path, notebook_id, req.title)
-    notebook["title"] = req.title
-    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
-    return NotebookResponse(**notebook, sources=sources)
+    return await _notebook_response(notebook_id, user_id)
 
 
 @router.patch(
@@ -291,11 +293,9 @@ async def set_contour(
     req: ContourRequest,
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
-    notebook = await _owned_notebook(notebook_id, user_id)
+    await _owned_notebook(notebook_id, user_id)
     await update_notebook_contour(settings.db_path, notebook_id, req.contour)
-    notebook = _parse_notebook(await get_notebook(settings.db_path, notebook_id))
-    sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
-    return NotebookResponse(**notebook, sources=sources)
+    return await _notebook_response(notebook_id, user_id)
 
 
 @router.delete(
