@@ -17,7 +17,7 @@ class Flashcard(BaseModel):
 
 
 class FlashcardsResponse(BaseModel):
-    cards: list[Flashcard]
+    flashcards: list[Flashcard]
 
 
 @router.post("/flashcards", response_model=FlashcardsResponse)
@@ -31,7 +31,7 @@ async def generate_flashcards(req: FlashcardsRequest) -> FlashcardsResponse:
     user = (
         f"Создай {req.count} карточек для самопроверки на основе текста ниже.\n"
         "Верни JSON в следующем формате:\n"
-        '{"cards": [{"question": "вопрос", "answer": "ответ"}]}\n\n'
+        '{"flashcards": [{"question": "вопрос", "answer": "ответ"}]}\n\n'
         f"Текст:\n{req.text}"
     )
 
@@ -41,6 +41,6 @@ async def generate_flashcards(req: FlashcardsRequest) -> FlashcardsResponse:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         data = json.loads(raw[start:end])
-        return FlashcardsResponse(cards=data["cards"])
+        return FlashcardsResponse(flashcards=data["flashcards"])
     except Exception:
         raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
