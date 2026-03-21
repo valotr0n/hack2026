@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -642,15 +642,22 @@ async def upload_source_url(
     description="""
 Задаёт вопрос по содержимому блокнота. Возвращает **SSE-стрим** (Server-Sent Events).
 
-**Формат каждого события:**
+**Формат первого события** (содержит источники):
 ```
 data: {"delta": "фрагмент текста", "sources": ["текст чанка 1", ...]}
+```
+
+**Формат последующих событий** (только текст):
+```
+data: {"delta": "следующий фрагмент"}
 ```
 
 **Завершение стрима:**
 ```
 data: [DONE]
 ```
+
+Поле `sources` присутствует **только в первом событии** стрима. В остальных событиях его нет.
 
 **Пример на JS:**
 ```js
@@ -738,6 +745,7 @@ async def chat_history(
     "/{notebook_id}/chat/history",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Очистить историю чата",
+    description="Удаляет все сообщения чата для указанного блокнота. Операция необратима.",
 )
 async def delete_chat_history(
     notebook_id: str,
@@ -763,6 +771,8 @@ async def delete_chat_history(
 ```json
 {"summary": "Текст краткого изложения..."}
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def summary(
@@ -770,8 +780,11 @@ async def summary(
     req: SummaryRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("summary"):
+        return {"summary": notebook["summary"]}
     client: httpx.AsyncClient = request.app.state.http_client
     # Для иерархического саммари нужен полный текст без ограничения
     text = await _notebook_text(client, notebook_id, max_length=None)
@@ -816,14 +829,22 @@ async def summary(
   ]
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def mindmap(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("mindmap"):
+        try:
+            return _json.loads(notebook["mindmap"])
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -854,6 +875,8 @@ async def mindmap(
   ]
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def flashcards(
@@ -861,8 +884,14 @@ async def flashcards(
     req: FlashcardsRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("flashcards"):
+        try:
+            return {"flashcards": _json.loads(notebook["flashcards"])}
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -893,6 +922,8 @@ async def flashcards(
 
 Для воспроизведения запросите файл: `GET /audio/{filename}`.
 Генерация занимает **30–120 секунд** в зависимости от объёма текста.
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def podcast(
@@ -900,8 +931,15 @@ async def podcast(
     req: PodcastRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("podcast_url"):
+        try:
+            script = _json.loads(notebook["podcast_script"]) if notebook.get("podcast_script") else []
+            return {"audio_url": notebook["podcast_url"], "script": script}
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -940,14 +978,22 @@ async def podcast(
   "penalties": ["Неустойка 1% от суммы долга"]
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def contract(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("contract"):
+        try:
+            return _json.loads(notebook["contract"])
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -980,14 +1026,22 @@ async def contract(
   ]
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def knowledge_graph(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("knowledge_graph"):
+        try:
+            return _json.loads(notebook["knowledge_graph"])
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -1136,14 +1190,22 @@ async def multi_search(
   ]
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def timeline(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("timeline"):
+        try:
+            return _json.loads(notebook["timeline"])
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -1188,6 +1250,8 @@ async def timeline(
   "summary": "Документ не содержит информации о залоге и поручительстве..."
 }
 ```
+
+> Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
 async def generate_questions(
@@ -1195,8 +1259,14 @@ async def generate_questions(
     req: QuestionsRequest,
     request: Request,
     user_id: str = Depends(require_auth),
+    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
+    if not force and notebook.get("questions"):
+        try:
+            return _json.loads(notebook["questions"])
+        except Exception:
+            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -1228,6 +1298,8 @@ async def generate_questions(
       "section": "п. 3.1 Процентная ставка",
       "type": "modified",
       "description": "Ставка изменена с 12% до 14% годовых",
+      "quote_a": "процентная ставка составляет 12% годовых",
+      "quote_b": "процентная ставка составляет 14% годовых",
       "severity": "critical"
     }
   ],
