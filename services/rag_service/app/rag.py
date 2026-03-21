@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import re
 import inspect
 import json
 from io import BytesIO, StringIO
@@ -135,7 +136,10 @@ async def extract_text_from_upload(file: UploadFile) -> str:
             detail="Unsupported file type. Use PDF, DOCX, TXT, CSV, or XLSX.",
         )
 
-    normalized_text = "\n".join(line for line in text.splitlines() if line.strip()).strip()
+    # Склеиваем переносы слов через дефис (артефакт PDF-парсинга)
+    # "зави-\nсимости" → "зависимости"
+    dehyphenated = re.sub(r"-\n(\S)", r"\1", text)
+    normalized_text = "\n".join(line for line in dehyphenated.splitlines() if line.strip()).strip()
 
     if settings.vision_enabled and suffix in (".pdf", ".docx"):
         image_descriptions = await extract_image_descriptions(payload, suffix, settings.vision_model_id)
