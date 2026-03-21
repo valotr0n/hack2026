@@ -105,6 +105,8 @@ def _extract_text_from_xlsx(payload: bytes) -> str:
 
 
 async def extract_text_from_upload(file: UploadFile) -> str:
+    from .vision import extract_image_descriptions
+
     filename = file.filename or "document"
     suffix = Path(filename).suffix.lower()
     payload = await file.read()
@@ -134,6 +136,13 @@ async def extract_text_from_upload(file: UploadFile) -> str:
         )
 
     normalized_text = "\n".join(line for line in text.splitlines() if line.strip()).strip()
+
+    if settings.vision_enabled and suffix in (".pdf", ".docx"):
+        image_descriptions = await extract_image_descriptions(payload, suffix, settings.vision_model_id)
+        if image_descriptions:
+            visual_block = "\n\n".join(image_descriptions)
+            normalized_text = f"{normalized_text}\n\n--- Визуальные элементы документа ---\n{visual_block}"
+
     if not normalized_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

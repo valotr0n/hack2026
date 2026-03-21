@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-oss-20b"
     embedder_model: str = "ai-forever/ru-en-RoSBERTa"
     qdrant_url: str = "http://qdrant:6333"
+    vision_enabled: bool = True
+    vision_model_id: str = "AvitoTech/avision"
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

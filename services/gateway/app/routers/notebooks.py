@@ -12,15 +12,18 @@ from pydantic import BaseModel, Field
 from ..auth import require_auth
 from ..config import settings
 from ..database import (
+    clear_chat_history,
     clear_notebook_cache,
     create_notebook,
     create_source,
     delete_notebook,
     delete_source,
+    get_chat_history,
     get_notebook,
     get_source,
     list_notebooks,
     list_sources,
+    save_chat_message,
     save_notebook_content,
     update_notebook_contour,
     update_notebook_title,
@@ -460,6 +463,7 @@ async def chat(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> StreamingResponse:
+    import json as _json_mod
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
@@ -477,12 +481,34 @@ async def chat(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
+    await save_chat_message(settings.db_path, notebook_id, "user", req.query)
+
     async def _stream():
+        accumulated: list[str] = []
+        sources: list[str] = []
         try:
             async for chunk in rag_resp.aiter_bytes():
                 yield chunk
+                for line in chunk.decode("utf-8", errors="ignore").splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        parsed = _json_mod.loads(data)
+                        if delta := parsed.get("delta"):
+                            accumulated.append(delta)
+                        if not sources and parsed.get("sources"):
+                            sources = parsed["sources"]
+                    except Exception:
+                        pass
         finally:
             await rag_resp.aclose()
+            if accumulated:
+                await save_chat_message(
+                    settings.db_path, notebook_id, "assistant", "".join(accumulated), sources
+                )
 
     return StreamingResponse(
         _stream(),
@@ -490,6 +516,32 @@ async def chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get(
+    "/{notebook_id}/chat/history",
+    summary="История чата",
+    description="Возвращает все сообщения чата для блокнота в хронологическом порядке.",
+)
+async def chat_history(
+    notebook_id: str,
+    user_id: str = Depends(require_auth),
+) -> list[dict]:
+    await _owned_notebook(notebook_id, user_id)
+    return await get_chat_history(settings.db_path, notebook_id)
+
+
+@router.delete(
+    "/{notebook_id}/chat/history",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Очистить историю чата",
+)
+async def delete_chat_history(
+    notebook_id: str,
+    user_id: str = Depends(require_auth),
+) -> None:
+    await _owned_notebook(notebook_id, user_id)
+    await clear_chat_history(settings.db_path, notebook_id)
 
 
 # ── Content generation ────────────────────────────────────────────────────────
