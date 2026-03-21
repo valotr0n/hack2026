@@ -26,16 +26,19 @@ CHUNK_OVERLAP = 50
 TOP_K = 5
 EmbeddingPromptName = Literal["search_query", "search_document"]
 
-FRAGMENT_LABEL = "[Фрагмент {index}]"
-SOURCE_LABEL = "Источник: {source}"
-CHUNK_INDEX_LABEL = "Номер чанка: {chunk_index}"
-SYSTEM_PROMPT = (
-    "Ты ассистент, отвечающий ТОЛЬКО на основе предоставленного контекста.\n"
-    "Отвечай на русском языке. "
-    "Если ответа нет в контексте — скажи об этом.\n"
-    "Всегда указывай, на каком фрагменте основан ответ.\n\n"
-    "Контекст:\n{context}"
-)
+SYSTEM_PROMPT = """\
+Ты — точный аналитик документов. Работаешь с материалами, загруженными пользователем.
+
+ПРАВИЛА (строго обязательны):
+1. Отвечай ТОЛЬКО на основе фрагментов ниже — не используй общие знания и не додумывай.
+2. Если ответа нет ни в одном фрагменте — скажи: «В загруженных документах эта информация отсутствует».
+3. При цитировании указывай источник в скобках: (Фрагмент N).
+4. Если информация есть в нескольких фрагментах — синтезируй её в единый ответ.
+5. Противоречия между фрагментами — явно укажи: «В документах есть расхождение: ...».
+6. Отвечай на русском языке. Структурируй ответ: сначала суть, потом детали.
+
+ФРАГМЕНТЫ ДОКУМЕНТОВ:
+{context}"""
 
 
 def _table_rows_to_text(headers: list[str], rows: list[list[str]]) -> str:
@@ -408,19 +411,21 @@ def build_system_prompt(chunks: list[dict[str, Any]]) -> tuple[str, list[str]]:
     context_parts = []
     for index, chunk in enumerate(chunks, start=1):
         context_parts.append(
-            "\n".join(
-                [
-                    FRAGMENT_LABEL.format(index=index),
-                    SOURCE_LABEL.format(source=chunk["source"]),
-                    CHUNK_INDEX_LABEL.format(chunk_index=chunk["chunk_index"]),
-                    chunk["text"],
-                ]
-            )
+            f"--- Фрагмент {index} | {chunk['source']} ---\n{chunk['text']}\n---"
         )
 
     context = "\n\n".join(context_parts)
     prompt = SYSTEM_PROMPT.format(context=context)
     return prompt, sources
+
+
+_PRE_ANSWER_INSTRUCTION = (
+    "Перед ответом мысленно:\n"
+    "1. Найди все фрагменты, относящиеся к вопросу.\n"
+    "2. Проверь — нет ли противоречий между ними.\n"
+    "3. Сформулируй ответ кратко и точно.\n\n"
+    "Вопрос: {query}"
+)
 
 
 def build_chat_messages(
@@ -432,7 +437,7 @@ def build_chat_messages(
     for item in history:
         if item.role in {"assistant", "user"} and item.content.strip():
             messages.append({"role": item.role, "content": item.content})
-    messages.append({"role": "user", "content": query})
+    messages.append({"role": "user", "content": _PRE_ANSWER_INSTRUCTION.format(query=query)})
     return messages
 
 
