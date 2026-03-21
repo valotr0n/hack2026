@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import summary, mindmap, flashcards, podcast
+from .routers import summary, mindmap, flashcards, podcast, transcribe
 
 app = FastAPI(title="Content Service", version="0.1.0")
 
@@ -16,6 +16,7 @@ app.include_router(summary.router)
 app.include_router(mindmap.router)
 app.include_router(flashcards.router)
 app.include_router(podcast.router)
+app.include_router(transcribe.router)
 
 
 @app.get("/health")

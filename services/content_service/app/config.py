@@ -6,6 +6,9 @@ class Settings:
     llm_api_key: str = os.getenv("LLM_API_KEY", "hackaton2026")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-oss-20b")
 
+    stt_base_url: str = os.getenv("STT_BASE_URL", "https://hackai.centrinvest.ru:6640/v1")
+    stt_api_key: str = os.getenv("STT_API_KEY", "hackaton2026")
+
     tts_voice_alex: str = os.getenv("TTS_VOICE_ALEX", "ru-RU-DmitryNeural")
     tts_voice_maria: str = os.getenv("TTS_VOICE_MARIA", "ru-RU-SvetlanaNeural")
 

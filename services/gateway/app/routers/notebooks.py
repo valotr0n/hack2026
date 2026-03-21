@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from ..database import (
     get_source,
     list_notebooks,
     list_sources,
+    save_notebook_content,
     update_notebook_title,
 )
 
@@ -26,6 +28,19 @@ router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 
 # Максимальный объём текста для передачи в LLM (~20k символов ≈ 5k токенов)
 _MAX_TEXT_LENGTH = 20_000
+
+import json as _json
+
+def _parse_notebook(nb: dict) -> dict:
+    """Десериализует JSON-колонки из SQLite в Python-объекты."""
+    for field in ("mindmap", "flashcards", "podcast_script"):
+        raw = nb.get(field)
+        if isinstance(raw, str):
+            try:
+                nb[field] = _json.loads(raw)
+            except Exception:
+                nb[field] = None
+    return nb
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -90,6 +105,11 @@ class NotebookResponse(BaseModel):
     title: str
     created_at: str
     sources: list[SourceResponse] = []
+    summary: str | None = None
+    mindmap: dict | None = None
+    flashcards: list | None = None
+    podcast_url: str | None = None
+    podcast_script: list | None = None
 
 
 class ChatMessage(BaseModel):
@@ -156,7 +176,7 @@ async def get_one(
     notebook_id: str,
     user_id: str = Depends(require_auth),
 ) -> NotebookResponse:
-    notebook = await _owned_notebook(notebook_id, user_id)
+    notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
     sources = await list_sources(settings.db_path, notebook_id)
     return NotebookResponse(**notebook, sources=sources)
 
@@ -235,6 +255,68 @@ async def upload_source(
         settings.db_path,
         notebook_id,
         file.filename or "document",
+        rag_data.get("chunks", 0),
+    )
+
+
+@router.post(
+    "/{notebook_id}/sources/transcribe",
+    status_code=status.HTTP_201_CREATED,
+    summary="Загрузить аудио/видео и транскрибировать",
+    description="""
+Принимает аудио или видеофайл, транскрибирует его через Whisper STT и сохраняет транскрипцию как источник в блокноте.
+
+**Поддерживаемые форматы:**
+- Аудио: mp3, wav, ogg, m4a, flac, aac, opus
+- Видео: mp4, avi, mov, mkv, webm, flv
+
+Возвращает созданный источник с `id`, `filename` (имя_файла_transcription.txt) и `chunks_count`.
+    """,
+)
+async def transcribe_source(
+    notebook_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    file_content = await file.read()
+    try:
+        transcribe_resp = await client.post(
+            _content("/transcribe"),
+            files={"file": (file.filename, io.BytesIO(file_content), file.content_type or "application/octet-stream")},
+            timeout=300.0,
+        )
+        transcribe_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    text = transcribe_resp.json().get("text", "")
+    stem = Path(file.filename or "transcription").stem
+    txt_filename = f"{stem}_transcription.txt"
+
+    try:
+        rag_resp = await client.post(
+            _rag("/upload"),
+            files={"file": (txt_filename, io.BytesIO(text.encode("utf-8")), "text/plain")},
+            data={"notebook_id": notebook_id},
+            timeout=120.0,
+        )
+        rag_resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+
+    rag_data = rag_resp.json()
+    return await create_source(
+        settings.db_path,
+        notebook_id,
+        txt_filename,
         rag_data.get("chunks", 0),
     )
 
@@ -359,7 +441,9 @@ async def summary(
     try:
         resp = await client.post(_content("/summary"), json={"text": text, "style": req.style})
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "summary", data.get("summary", ""))
+        return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -399,7 +483,9 @@ async def mindmap(
     try:
         resp = await client.post(_content("/mindmap"), json={"text": text})
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "mindmap", _json.dumps(data, ensure_ascii=False))
+        return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -436,7 +522,9 @@ async def flashcards(
     try:
         resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count})
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "flashcards", _json.dumps(data.get("flashcards", []), ensure_ascii=False))
+        return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -473,6 +561,9 @@ async def podcast(
     try:
         resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone})
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
+        await save_notebook_content(settings.db_path, notebook_id, "podcast_script", _json.dumps(data.get("script", []), ensure_ascii=False))
+        return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
