@@ -908,7 +908,7 @@ async def mindmap(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.contract_max_text_length)
 
     try:
         resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -955,7 +955,7 @@ async def flashcards(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.timeline_max_text_length)
 
     try:
         resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(notebook))
@@ -1003,7 +1003,7 @@ async def podcast(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.timeline_max_text_length)
 
     try:
         resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(notebook))
@@ -1057,7 +1057,7 @@ async def contract(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.contract_max_text_length)
 
     try:
         resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1105,7 +1105,7 @@ async def knowledge_graph(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.timeline_max_text_length)
 
     try:
         resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1269,7 +1269,7 @@ async def timeline(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.timeline_max_text_length)
 
     try:
         resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1330,7 +1330,7 @@ async def generate_questions(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=settings.questions_max_text_length)
 
     try:
         resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1387,8 +1387,8 @@ async def compare_notebooks(
     contour = "closed" if "closed" in (nb_a.get("contour", "open"), nb_b.get("contour", "open")) else "open"
     client: httpx.AsyncClient = request.app.state.http_client
 
-    text_a = await _notebook_text(client, req.notebook_ids[0])
-    text_b = await _notebook_text(client, req.notebook_ids[1])
+    text_a = await _notebook_text(client, req.notebook_ids[0], max_length=settings.compare_max_text_length)
+    text_b = await _notebook_text(client, req.notebook_ids[1], max_length=settings.compare_max_text_length)
 
     try:
         resp = await client.post(
@@ -1484,8 +1484,8 @@ async def compare_sources(
         resp = await client.post(
             _content("/compare"),
             json={
-                "text_a": text_a[:_MAX_TEXT_LENGTH],
-                "text_b": text_b[:_MAX_TEXT_LENGTH],
+                "text_a": text_a[:settings.compare_max_text_length],
+                "text_b": text_b[:settings.compare_max_text_length],
                 "label_a": src_a["filename"],
                 "label_b": src_b["filename"],
             },

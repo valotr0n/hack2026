@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
@@ -93,7 +94,12 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         f"Формат:\n{fmt}\n\n"
         f"Договор:\n{req.text}"
     )
-    raw1 = await chat(system=_EXTRACT_SYSTEM, user=extract_user, temperature=0.1)
+    raw1 = await chat(
+        system=_EXTRACT_SYSTEM,
+        user=extract_user,
+        temperature=0.1,
+        max_tokens=settings.contract_extract_max_tokens,
+    )
 
     try:
         data = _parse_contract(raw1)
@@ -110,7 +116,12 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         "Удали из каждого поля всё, что явно не подтверждается текстом выше. "
         f"Верни исправленный JSON в том же формате:\n{fmt}"
     )
-    raw2 = await chat(system=_VERIFY_SYSTEM, user=verify_user, temperature=0.1)
+    raw2 = await chat(
+        system=_VERIFY_SYSTEM,
+        user=verify_user,
+        temperature=0.1,
+        max_tokens=settings.contract_verify_max_tokens,
+    )
 
     try:
         verified = _parse_contract(raw2)

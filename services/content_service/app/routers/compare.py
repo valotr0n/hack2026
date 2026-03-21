@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
@@ -91,7 +92,12 @@ async def compare_documents(req: CompareRequest) -> CompareResponse:
         "- Описание должно содержать конкретные значения: было → стало"
     )
 
-    raw = await chat(system=system, user=user, temperature=0.1)
+    raw = await chat(
+        system=system,
+        user=user,
+        temperature=0.1,
+        max_tokens=settings.compare_max_tokens,
+    )
 
     try:
         start = raw.find("{")

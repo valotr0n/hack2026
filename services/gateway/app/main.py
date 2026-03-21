@@ -45,7 +45,14 @@ UPSTREAMS = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db(settings.db_path)
-    app.state.http_client = httpx.AsyncClient(timeout=settings.request_timeout_seconds)
+    app.state.http_client = httpx.AsyncClient(
+        timeout=settings.request_timeout_seconds,
+        trust_env=False,
+        limits=httpx.Limits(
+            max_connections=settings.gateway_max_connections,
+            max_keepalive_connections=settings.gateway_max_keepalive_connections,
+        ),
+    )
     try:
         yield
     finally:

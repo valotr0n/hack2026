@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
@@ -97,7 +98,12 @@ async def generate_questions(req: QuestionsRequest) -> QuestionsResponse:
         f"Документ:\n{req.text}"
     )
 
-    raw = await chat(system=system, user=user, temperature=0.3)
+    raw = await chat(
+        system=system,
+        user=user,
+        temperature=0.3,
+        max_tokens=settings.questions_max_tokens,
+    )
 
     try:
         start = raw.find("{")

@@ -19,6 +19,12 @@ class Settings:
     content_service_url: str
     cors_origins: list[str]
     request_timeout_seconds: float
+    contract_max_text_length: int
+    timeline_max_text_length: int
+    questions_max_text_length: int
+    compare_max_text_length: int
+    gateway_max_connections: int
+    gateway_max_keepalive_connections: int
     http_port: int
     https_port: int
     tls_cert_file: str
@@ -32,6 +38,12 @@ settings = Settings(
     content_service_url=_env("CONTENT_SERVICE_URL", "http://content_service:8002"),
     cors_origins=_split_csv(_env("CORS_ORIGINS", "*")),
     request_timeout_seconds=float(_env("REQUEST_TIMEOUT_SECONDS", "300")),
+    contract_max_text_length=int(_env("CONTRACT_MAX_TEXT_LENGTH", "16000")),
+    timeline_max_text_length=int(_env("TIMELINE_MAX_TEXT_LENGTH", "12000")),
+    questions_max_text_length=int(_env("QUESTIONS_MAX_TEXT_LENGTH", "14000")),
+    compare_max_text_length=int(_env("COMPARE_MAX_TEXT_LENGTH", "12000")),
+    gateway_max_connections=int(_env("GATEWAY_MAX_CONNECTIONS", "200")),
+    gateway_max_keepalive_connections=int(_env("GATEWAY_MAX_KEEPALIVE_CONNECTIONS", "50")),
     http_port=int(_env("GATEWAY_HTTP_PORT", "8000")),
     https_port=int(_env("GATEWAY_HTTPS_PORT", "443")),
     tls_cert_file=_env("TLS_CERT_FILE", "/certs/server.crt"),
