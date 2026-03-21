@@ -673,7 +673,7 @@ async def mindmap(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(notebook))
+        resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "mindmap", _json.dumps(data, ensure_ascii=False))
@@ -797,7 +797,7 @@ async def contract(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(notebook))
+        resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "contract", _json.dumps(data, ensure_ascii=False))
@@ -837,7 +837,7 @@ async def knowledge_graph(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook))
+        resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "knowledge_graph", _json.dumps(data, ensure_ascii=False))
@@ -993,7 +993,7 @@ async def timeline(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook))
+        resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
@@ -1046,7 +1046,7 @@ async def generate_questions(
     text = await _notebook_text(client, notebook_id)
 
     try:
-        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook))
+        resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook), timeout=300.0)
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
