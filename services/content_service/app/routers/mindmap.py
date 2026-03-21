@@ -6,13 +6,21 @@ from ..llm import chat
 router = APIRouter()
 
 
+class MindmapNode(BaseModel):
+    title: str
+    children: list["MindmapNode"] = []
+
+
+MindmapNode.model_rebuild()
+
+
 class MindmapRequest(BaseModel):
     text: str
 
 
 class MindmapResponse(BaseModel):
-    nodes: list[dict]
-    edges: list[dict]
+    title: str
+    children: list[MindmapNode] = []
 
 
 @router.post("/mindmap", response_model=MindmapResponse)
@@ -24,15 +32,20 @@ async def generate_mindmap(req: MindmapRequest) -> MindmapResponse:
     )
 
     user = (
-        "Построй mindmap по тексту ниже.\n\n"
+        "Построй mindmap по тексту ниже в виде иерархического дерева.\n\n"
         "Правила:\n"
-        "1. nodes — уникальные конкретные понятия из текста (не абстрактные слова вроде 'понятие', 'термин', 'содержит').\n"
-        "2. Каждый node встречается ровно один раз, id — уникальная строка-число.\n"
-        "3. edges — смысловые связи. label ребра — конкретный глагол или фраза, описывающая отношение (например: 'использует', 'определяет', 'зависит от', 'является частью'). Запрещено использовать 'содержит' как единственный label.\n"
-        "4. Не создавай рёбра между одинаковыми узлами.\n\n"
+        "1. title корня — главная тема документа (одна фраза).\n"
+        "2. children корня — 3-7 ключевых разделов/тем.\n"
+        "3. У каждого раздела children — конкретные подпункты (2-5 штук).\n"
+        "4. Глубина дерева — не более 3 уровней.\n"
+        "5. Названия узлов — короткие конкретные фразы (2-5 слов), без воды.\n"
+        "6. Не дублируй понятия на разных ветках.\n\n"
         "Формат ответа (только JSON, ничего лишнего):\n"
-        '{"nodes": [{"id": "1", "label": "понятие"}], '
-        '"edges": [{"from": "1", "to": "2", "label": "конкретная связь"}]}\n\n'
+        '{"title": "Главная тема", "children": ['
+        '{"title": "Раздел 1", "children": ['
+        '{"title": "Подпункт 1.1", "children": []}, '
+        '{"title": "Подпункт 1.2", "children": []}]}, '
+        '{"title": "Раздел 2", "children": []}]}\n\n'
         f"Текст:\n{req.text}"
     )
 
@@ -42,6 +55,6 @@ async def generate_mindmap(req: MindmapRequest) -> MindmapResponse:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         data = json.loads(raw[start:end])
-        return MindmapResponse(nodes=data["nodes"], edges=data["edges"])
+        return MindmapResponse(title=data["title"], children=data.get("children", []))
     except Exception:
         raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")

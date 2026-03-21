@@ -641,17 +641,21 @@ async def summary(
     description="""
 Генерирует структуру mindmap по содержимому блокнота.
 
-**Ответ** — дерево в JSON:
+**Ответ** — иерархическое дерево в JSON (максимум 3 уровня):
 ```json
 {
   "title": "Главная тема",
   "children": [
     {
-      "title": "Подтема 1",
+      "title": "Раздел 1",
       "children": [
-        {"title": "Пункт 1.1", "children": []},
-        {"title": "Пункт 1.2", "children": []}
+        {"title": "Подпункт 1.1", "children": []},
+        {"title": "Подпункт 1.2", "children": []}
       ]
+    },
+    {
+      "title": "Раздел 2",
+      "children": []
     }
   ]
 }
