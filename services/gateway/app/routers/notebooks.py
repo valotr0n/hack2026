@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..auth import require_auth
 from ..config import settings
@@ -37,6 +38,14 @@ _MAX_TEXT_LENGTH = 20_000
 
 import json as _json
 
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}"
+)
+
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
     for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline", "questions", "presentation"):
@@ -60,6 +69,40 @@ def _parse_source(src: dict) -> dict:
     elif raw is None:
         src["tags"] = []
     return src
+
+
+def _normalize_pair_payload(
+    value: Any,
+    list_key: str,
+    key_pairs: tuple[tuple[str, str], ...],
+) -> Any:
+    ids: Any = None
+
+    if isinstance(value, (list, tuple)):
+        ids = list(value)
+    elif isinstance(value, dict):
+        if list_key in value:
+            ids = value[list_key]
+        elif "ids" in value:
+            ids = value["ids"]
+        else:
+            for left_key, right_key in key_pairs:
+                if left_key in value and right_key in value:
+                    ids = [value[left_key], value[right_key]]
+                    break
+
+    if ids is None:
+        return value
+
+    if isinstance(ids, tuple):
+        ids = list(ids)
+
+    return {list_key: ids}
+
+
+def _normalize_notebook_id(value: str) -> str:
+    match = _UUID_RE.search(value)
+    return match.group(0) if match else value
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -207,6 +250,24 @@ class QuestionsRequest(BaseModel):
 
 class CompareRequest(BaseModel):
     notebook_ids: list[str] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_payload(cls, value: Any) -> Any:
+        return _normalize_pair_payload(
+            value,
+            "notebook_ids",
+            (
+                ("notebook_id_a", "notebook_id_b"),
+                ("notebookIdA", "notebookIdB"),
+                ("left_id", "right_id"),
+                ("leftId", "rightId"),
+                ("first_id", "second_id"),
+                ("firstId", "secondId"),
+                ("id1", "id2"),
+                ("a", "b"),
+            ),
+        )
 
 
 class PresentationRequest(BaseModel):
@@ -356,6 +417,7 @@ async def upload_source(
         file.filename or "document",
         rag_data.get("chunks", 0),
         status="ready",
+        source_id=rag_data.get("source_id"),
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = rag_data.get("preview", "")
@@ -1351,6 +1413,24 @@ async def compare_notebooks(
 class SourceCompareRequest(BaseModel):
     source_ids: list[str] = Field(min_length=2, max_length=2)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_payload(cls, value: Any) -> Any:
+        return _normalize_pair_payload(
+            value,
+            "source_ids",
+            (
+                ("source_id_a", "source_id_b"),
+                ("sourceIdA", "sourceIdB"),
+                ("left_id", "right_id"),
+                ("leftId", "rightId"),
+                ("first_id", "second_id"),
+                ("firstId", "secondId"),
+                ("id1", "id2"),
+                ("a", "b"),
+            ),
+        )
+
 
 @router.post(
     "/{notebook_id}/sources/compare",
@@ -1370,6 +1450,7 @@ async def compare_sources(
     request: Request,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
+    notebook_id = _normalize_notebook_id(notebook_id)
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
 
@@ -1381,7 +1462,11 @@ async def compare_sources(
 
     async def _source_text(source_id: str) -> str:
         try:
-            resp = await client.get(_rag(f"/notebook/{notebook_id}/sources/{source_id}/content"))
+            source = src_a if source_id == req.source_ids[0] else src_b
+            resp = await client.get(
+                _rag(f"/notebook/{notebook_id}/sources/{source_id}/content"),
+                params={"filename": source["filename"]},
+            )
             resp.raise_for_status()
             return resp.json().get("text", "")
         except httpx.RequestError as exc:

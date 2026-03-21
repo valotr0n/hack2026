@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
 from ..rag import delete_collection, delete_source_chunks, get_notebook_content, get_source_content
@@ -23,8 +23,12 @@ async def get_content(notebook_id: str) -> NotebookContentResponse:
 
 
 @router.get("/notebook/{notebook_id}/sources/{source_id}/content")
-async def get_source_text(notebook_id: str, source_id: str) -> dict:
-    content = await get_source_content(notebook_id, source_id)
+async def get_source_text(
+    notebook_id: str,
+    source_id: str,
+    filename: str | None = Query(None),
+) -> dict:
+    content = await get_source_content(notebook_id, source_id, filename)
     if not content["text"].strip():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
