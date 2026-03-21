@@ -52,7 +52,33 @@ async def lifespan(app: FastAPI):
         await app.state.http_client.aclose()
 
 
-app = FastAPI(title="AI Platform Gateway", lifespan=lifespan)
+app = FastAPI(
+    title="AI Platform Gateway",
+    version="1.0.0",
+    description="""
+## AI-платформа переработки знаний
+
+Аналог **NotebookLM** — загружайте документы, задавайте вопросы и генерируйте контент.
+
+### Как начать работу
+
+1. **Зарегистрируйтесь** — `POST /auth/register`
+2. **Войдите** — `POST /auth/login` → получите `access_token`
+3. **Передавайте токен** в заголовке каждого запроса:
+   ```
+   Authorization: Bearer <access_token>
+   ```
+4. **Создайте блокнот** — `POST /notebooks`
+5. **Загрузите документы** — `POST /notebooks/{id}/sources` (PDF, DOCX, TXT)
+6. **Используйте функции** — чат, саммари, mindmap, карточки, подкаст
+
+### Базовый URL
+```
+http://89.169.174.78:8000
+```
+    """,
+    lifespan=lifespan,
+)
 
 cors_allow_origins = settings.cors_origins
 app.add_middleware(

@@ -31,7 +31,13 @@ class UserResponse(BaseModel):
     created_at: str
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Регистрация",
+    description="Создаёт нового пользователя. Логин от 3 до 50 символов, пароль минимум 6 символов.",
+)
 async def register(req: RegisterRequest) -> UserResponse:
     if await get_user_by_username(settings.db_path, req.username):
         raise HTTPException(
@@ -42,7 +48,12 @@ async def register(req: RegisterRequest) -> UserResponse:
     return UserResponse(user_id=user["id"], username=user["username"], created_at=user["created_at"])
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    summary="Вход",
+    description="Возвращает JWT-токен. Передавайте его в заголовке `Authorization: Bearer <token>`. Токен действует 24 часа.",
+)
 async def login(req: LoginRequest) -> TokenResponse:
     user = await get_user_by_username(settings.db_path, req.username)
     if not user or user["password_hash"] != hash_password(req.password):
@@ -53,7 +64,12 @@ async def login(req: LoginRequest) -> TokenResponse:
     return TokenResponse(access_token=create_access_token(user["id"]))
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    summary="Текущий пользователь",
+    description="Возвращает данные авторизованного пользователя по токену.",
+)
 async def me(user_id: str = Depends(require_auth)) -> UserResponse:
     user = await get_user_by_id(settings.db_path, user_id)
     if not user:
