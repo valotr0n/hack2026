@@ -1,4 +1,6 @@
 .env
+services/rag_service/.env
+env_rag/
 __pycache__/
 *.pyc
 *.pyo
@@ -7,3 +9,6 @@ __pycache__/
 certs/*.crt
 certs/*.key
 data/
+venv/
+.venv/
+.claude/

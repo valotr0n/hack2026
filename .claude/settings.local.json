@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where docker:*)",
+      "Bash(pip --version)",
+      "Bash(ffmpeg -version)",
+      "Bash(pip install:*)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //PID 16828 //F 2)",
+      "Bash(1 netstat:*)",
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "WebSearch",
+      "WebFetch(domain:sourcecraft.dev)"
+    ]
+  }
+}
