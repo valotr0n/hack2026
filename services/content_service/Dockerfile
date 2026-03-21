@@ -13,7 +13,8 @@ RUN apt-get update \
 RUN pip install --no-cache-dir \
     torch==2.3.1 \
     torchaudio==2.3.1 \
-    --index-url https://download.pytorch.org/whl/cpu
+    --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir omegaconf>=2.3
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
