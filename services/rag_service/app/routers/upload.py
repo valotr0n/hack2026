@@ -39,4 +39,4 @@ async def upload_document(
         notebook_id=notebook_id,
         source_id=source_id,
     )
-    return UploadResponse(doc_id=collection_id, chunks=len(chunks), source_id=source_id)
+    return UploadResponse(doc_id=collection_id, chunks=len(chunks), source_id=source_id, preview=full_text[:500])

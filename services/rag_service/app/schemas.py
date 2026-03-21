@@ -18,3 +18,4 @@ class UploadResponse(BaseModel):
     doc_id: str
     chunks: int
     source_id: str
+    preview: str = ""  # первые 500 символов текста документа для автотегирования

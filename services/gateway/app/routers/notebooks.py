@@ -69,36 +69,22 @@ async def _autotag_source_bg(
     client: httpx.AsyncClient,
     db_path: str,
     source_id: str,
-    notebook_id: str,
+    preview: str,
     contour: str,
 ) -> None:
-    """Фоновая задача: автотегирование источника после загрузки."""
+    """Фоновая задача: автотегирование источника по его тексту (preview)."""
+    if not preview.strip():
+        return
     try:
-        resp = await client.get(_rag(f"/notebook/{notebook_id}/content"))
-        resp.raise_for_status()
-        text = resp.json().get("text", "")[:500]
-        if not text.strip():
-            return
         tag_resp = await client.post(
             _content("/autotag"),
-            json={"text": text},
+            json={"text": preview},
             headers={"x-contour": contour},
         )
         tag_resp.raise_for_status()
         data = tag_resp.json()
-        import json as _j
         tags = data.get("tags", [])
-        if isinstance(tags, str):
-            try:
-                tags = _j.loads(tags)
-            except Exception:
-                tags = []
-        await update_source_autotag(
-            db_path,
-            source_id,
-            data.get("doc_type", "прочее"),
-            tags,
-        )
+        await update_source_autotag(db_path, source_id, data.get("doc_type", "прочее"), tags)
     except Exception:
         pass  # best-effort, не блокируем ответ пользователю
 
@@ -393,7 +379,7 @@ async def upload_source(
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     asyncio.create_task(_autotag_source_bg(
-        client, settings.db_path, source["id"], notebook_id, notebook.get("contour", "open")
+        client, settings.db_path, source["id"], rag_data.get("preview", ""), notebook.get("contour", "open")
     ))
     return source
 
@@ -461,7 +447,7 @@ async def transcribe_source(
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     asyncio.create_task(_autotag_source_bg(
-        client, settings.db_path, source["id"], notebook_id, notebook.get("contour", "open")
+        client, settings.db_path, source["id"], text[:500], notebook.get("contour", "open")
     ))
     return source
 
