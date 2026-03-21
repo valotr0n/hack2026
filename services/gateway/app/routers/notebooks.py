@@ -34,7 +34,7 @@ import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
-    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline", "questions"):
+    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline", "questions", "presentation"):
         raw = nb.get(field)
         if isinstance(raw, str):
             try:
@@ -121,6 +121,7 @@ class NotebookResponse(BaseModel):
     knowledge_graph: dict | None = None
     timeline: dict | None = None
     questions: dict | None = None
+    presentation: dict | None = None
 
 
 class ChatMessage(BaseModel):
@@ -162,6 +163,11 @@ class QuestionsRequest(BaseModel):
 
 class CompareRequest(BaseModel):
     notebook_ids: list[str] = Field(min_length=2, max_length=2)
+
+
+class PresentationRequest(BaseModel):
+    title: str = ""
+    style: str = "business"  # business | academic | popular
 
 
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
@@ -956,3 +962,87 @@ async def compare_notebooks(
         return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/presentation/preview",
+    summary="Структура презентации (превью)",
+    description="""
+Генерирует структуру слайдов в JSON — для отображения превью в браузере перед скачиванием.
+
+**Параметр `style`:** `business` · `academic` · `popular`
+
+**Ответ:**
+```json
+{
+  "slides": [
+    {"type": "title", "title": "Анализ кредитного портфеля", "subtitle": "Q1 2026"},
+    {"type": "content", "title": "Ключевые показатели", "bullets": ["NPL 2.3%", "ROE 18%"]},
+    {"type": "summary", "title": "Итоги", "bullets": ["Портфель вырос на 12%"]}
+  ]
+}
+```
+    """,
+)
+async def presentation_preview(
+    notebook_id: str,
+    req: PresentationRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    nb = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(
+            _content("/presentation/preview"),
+            json={"text": text, "title": req.title or nb["title"], "style": req.style},
+            headers=_contour_headers(request),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "presentation", _json.dumps(data, ensure_ascii=False))
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/presentation/download",
+    summary="Скачать презентацию (PPTX)",
+    description="""
+Генерирует и возвращает готовый файл `.pptx` для скачивания.
+Презентация оформлена в корпоративном стиле (тёмно-синий + золотой).
+
+**Параметр `style`:** `business` · `academic` · `popular`
+
+Возвращает бинарный файл `presentation.pptx`.
+    """,
+)
+async def presentation_download(
+    notebook_id: str,
+    req: PresentationRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> StreamingResponse:
+    nb = await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(
+            _content("/presentation/download"),
+            json={"text": text, "title": req.title or nb["title"], "style": req.style},
+            headers=_contour_headers(request),
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    return StreamingResponse(
+        resp.aiter_bytes(),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f'attachment; filename="presentation.pptx"'},
+    )
