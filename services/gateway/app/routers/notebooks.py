@@ -33,7 +33,7 @@ import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
-    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph"):
+    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph", "timeline"):
         raw = nb.get(field)
         if isinstance(raw, str):
             try:
@@ -112,6 +112,7 @@ class NotebookResponse(BaseModel):
     podcast_script: list | None = None
     contract: dict | None = None
     knowledge_graph: dict | None = None
+    timeline: dict | None = None
 
 
 class ChatMessage(BaseModel):
@@ -769,5 +770,46 @@ async def multi_search(
         resp.raise_for_status()
         data = resp.json()
         return {"answer": data.get("answer", ""), "notebooks_searched": titles}
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/timeline",
+    summary="Временная шкала",
+    description="""
+Извлекает все события с датами из документов блокнота и строит хронологическую шкалу.
+
+Незаменимо для кредитных историй, договоров, судебных дел, проектной документации.
+
+**Типы событий:** `payment` · `deadline` · `event` · `agreement` · `violation` · `other`
+
+**Ответ:**
+```json
+{
+  "events": [
+    {"date": "01.03.2026", "title": "Подписание договора", "description": "Кредит на 5 млн руб.", "type": "agreement"},
+    {"date": "01.04.2026", "title": "Первый платёж",      "description": "150 000 руб.",          "type": "payment"},
+    {"date": "30.06.2026", "title": "Дедлайн отчётности", "description": "Предоставить баланс",    "type": "deadline"}
+  ]
+}
+```
+    """,
+)
+async def timeline(
+    notebook_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(_content("/timeline"), json={"text": text})
+        resp.raise_for_status()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
+        return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
