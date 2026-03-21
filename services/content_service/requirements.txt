@@ -6,3 +6,4 @@ aiofiles==24.1.0
 python-multipart==0.0.12
 httpx==0.28.1
 faster-whisper==1.1.1
+omegaconf>=2.3,<3.0
