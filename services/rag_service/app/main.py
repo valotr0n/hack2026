@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, suppress
 
 import httpx
 from fastapi import FastAPI
@@ -13,6 +15,8 @@ from .config import settings
 from .routers.chat import router as chat_router
 from .routers.notebook_content import router as notebook_content_router
 from .routers.upload import router as upload_router
+
+logger = logging.getLogger(__name__)
 
 
 async def _close_resource(resource: object) -> None:
@@ -37,10 +41,24 @@ async def lifespan(app: FastAPI):
 
     app.state.embedding_model = embedding_model
     app.state.llm_client = llm_client
+    vision_preload_task: asyncio.Task[None] | None = None
+    if settings.vision_enabled and settings.vision_preload:
+        from .vision import preload_vision_model
+
+        vision_preload_task = asyncio.create_task(
+            preload_vision_model(settings.vision_model_id),
+            name="rag-service-vision-preload",
+        )
+        app.state.vision_preload_task = vision_preload_task
+        logger.info("Scheduled background preload for vision model: %s", settings.vision_model_id)
 
     try:
         yield
     finally:
+        if vision_preload_task is not None and not vision_preload_task.done():
+            vision_preload_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await vision_preload_task
         await _close_resource(llm_client)
         await _close_resource(llm_http_client)
 
