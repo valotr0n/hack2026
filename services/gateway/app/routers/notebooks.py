@@ -153,6 +153,10 @@ class QuestionsRequest(BaseModel):
     context: str = "general"  # general | credit | legal | financial
 
 
+class CompareRequest(BaseModel):
+    notebook_ids: list[str] = Field(min_length=2, max_length=2)
+
+
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
 
 @router.post(
@@ -868,6 +872,69 @@ async def generate_questions(
         resp.raise_for_status()
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/compare",
+    summary="Сравнить два блокнота",
+    description="""
+Сравнивает документы из двух блокнотов и возвращает список расхождений.
+Незаменимо для сравнения версий договора, двух предложений от разных банков,
+оригинала и дополнительного соглашения.
+
+**Тело запроса:** `{"notebook_ids": ["id_первого", "id_второго"]}`
+
+**Ответ:**
+```json
+{
+  "changes": [
+    {
+      "section": "п. 3.1 Процентная ставка",
+      "type": "modified",
+      "description": "Ставка изменена с 12% до 14% годовых",
+      "severity": "critical"
+    }
+  ],
+  "summary": "Новая версия ужесточает штрафные условия...",
+  "risk_level": "high",
+  "label_a": "Название блокнота 1",
+  "label_b": "Название блокнота 2"
+}
+```
+
+**Типы изменений:** `added` · `removed` · `modified` · `conflict`
+**Severity:** `critical` · `warning` · `info`
+    """,
+)
+async def compare_notebooks(
+    req: CompareRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    nb_a = await _owned_notebook(req.notebook_ids[0], user_id)
+    nb_b = await _owned_notebook(req.notebook_ids[1], user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    text_a = await _notebook_text(client, req.notebook_ids[0])
+    text_b = await _notebook_text(client, req.notebook_ids[1])
+
+    try:
+        resp = await client.post(
+            _content("/compare"),
+            json={
+                "text_a": text_a,
+                "text_b": text_b,
+                "label_a": nb_a["title"],
+                "label_b": nb_b["title"],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        data["label_a"] = nb_a["title"]
+        data["label_b"] = nb_b["title"]
         return data
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
