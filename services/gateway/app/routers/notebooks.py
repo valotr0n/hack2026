@@ -118,6 +118,12 @@ class SourceResponse(BaseModel):
     error: str | None = None
 
 
+class NotebookListItem(BaseModel):
+    id: str
+    title: str
+    created_at: str
+
+
 class NotebookResponse(BaseModel):
     id: str
     title: str
@@ -201,17 +207,13 @@ async def create(
 
 @router.get(
     "",
-    response_model=list[NotebookResponse],
+    response_model=list[NotebookListItem],
     summary="Список блокнотов",
-    description="Возвращает все блокноты текущего пользователя вместе со списком источников в каждом.",
+    description="Возвращает все блокноты текущего пользователя (только id и название).",
 )
-async def list_all(user_id: str = Depends(require_auth)) -> list[NotebookResponse]:
+async def list_all(user_id: str = Depends(require_auth)) -> list[NotebookListItem]:
     notebooks = await list_notebooks(settings.db_path, user_id)
-    result = []
-    for nb in notebooks:
-        sources = await list_sources(settings.db_path, nb["id"])
-        result.append(NotebookResponse(**nb, sources=sources))
-    return result
+    return [NotebookListItem(**nb) for nb in notebooks]
 
 
 @router.get(
@@ -329,6 +331,7 @@ async def upload_source(
         notebook_id,
         file.filename or "document",
         rag_data.get("chunks", 0),
+        status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     return source
@@ -393,6 +396,7 @@ async def transcribe_source(
         notebook_id,
         txt_filename,
         rag_data.get("chunks", 0),
+        status="ready",
     )
     await clear_notebook_cache(settings.db_path, notebook_id)
     return source
