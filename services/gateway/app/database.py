@@ -49,6 +49,7 @@ async def init_db(path: str) -> None:
             ("contract", "TEXT"),
             ("knowledge_graph", "TEXT"),
             ("timeline", "TEXT"),
+            ("questions", "TEXT"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE notebooks ADD COLUMN {col} {typedef}")
@@ -129,7 +130,7 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline FROM notebooks WHERE id = ?",
+            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions FROM notebooks WHERE id = ?",
             (notebook_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -137,7 +138,7 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
 
 
 async def save_notebook_content(path: str, notebook_id: str, field: str, value: str) -> None:
-    allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script", "contract", "knowledge_graph", "timeline"}
+    allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script", "contract", "knowledge_graph", "timeline", "questions"}
     if field not in allowed:
         raise ValueError(f"Unknown field: {field}")
     async with aiosqlite.connect(path) as db:
