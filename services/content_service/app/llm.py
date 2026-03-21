@@ -25,7 +25,7 @@ _closed_client = AsyncOpenAI(
 )
 
 
-async def chat(system: str, user: str) -> str:
+async def chat(system: str, user: str, temperature: float = 0.7) -> str:
     contour = contour_var.get()
     if contour == "closed":
         client = _closed_client
@@ -40,6 +40,6 @@ async def chat(system: str, user: str) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        temperature=0.7,
+        temperature=temperature,
     )
     return response.choices[0].message.content

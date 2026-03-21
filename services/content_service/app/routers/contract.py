@@ -27,6 +27,29 @@ class ContractResponse(BaseModel):
     penalties: list[str]
 
 
+_EXTRACT_SYSTEM = (
+    "Ты — юридический аналитик банка. "
+    "Извлекай ТОЛЬКО то, что явно написано в тексте договора. "
+    "Если какое-либо поле отсутствует в тексте — возвращай пустой массив или пустую строку. "
+    "Запрещено додумывать, предполагать или добавлять типичные условия договоров. "
+    "Отвечай строго в формате JSON без лишнего текста."
+)
+
+_VERIFY_SYSTEM = (
+    "Ты — аудитор юридических данных. "
+    "Тебе дан исходный текст договора и извлечённые из него данные. "
+    "Проверь каждый пункт: если он явно подтверждается текстом — оставь. "
+    "Если не подтверждается или додуман — удали. "
+    "Возвращай исправленный JSON в том же формате, без пояснений."
+)
+
+
+def _parse_contract(raw: str) -> dict:
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    return json.loads(raw[start:end])
+
+
 @router.post(
     "/contract",
     response_model=ContractResponse,
@@ -34,6 +57,9 @@ class ContractResponse(BaseModel):
     description="""
 Извлекает структурированную информацию из текста договора:
 стороны, предмет, ключевые условия, обязательства, риски, сроки, штрафы.
+
+Используется двухпроходная верификация: сначала извлечение, затем проверка
+каждого пункта на соответствие исходному тексту. Исключает галлюцинации.
 
 **Ответ:**
 ```json
@@ -50,36 +76,52 @@ class ContractResponse(BaseModel):
     """,
 )
 async def analyze_contract(req: ContractRequest) -> ContractResponse:
-    system = (
-        "Ты — юридический аналитик банка. Тщательно извлекай структурированную информацию из договоров. "
-        "Отвечай строго в формате JSON без лишнего текста."
-    )
-    user = (
-        "Проанализируй договор и верни JSON строго в формате:\n"
+    fmt = (
         '{"parties": ["сторона 1", "сторона 2"], '
-        '"subject": "предмет договора в 1-2 предложениях", '
-        '"key_conditions": ["условие 1", "условие 2"], '
-        '"obligations": [{"party": "название стороны", "text": "обязательство"}], '
-        '"risks": ["риск 1", "риск 2"], '
-        '"deadlines": ["срок 1", "срок 2"], '
-        '"penalties": ["штраф/пеня 1"]}\n\n'
+        '"subject": "предмет договора — 1-2 предложения дословно из текста", '
+        '"key_conditions": ["условие 1 из текста", "условие 2 из текста"], '
+        '"obligations": [{"party": "название стороны", "text": "обязательство дословно из текста"}], '
+        '"risks": ["риск 1 из текста"], '
+        '"deadlines": ["срок 1 из текста"], '
+        '"penalties": ["штраф/пеня из текста"]}'
+    )
+
+    # Проход 1: извлечение
+    extract_user = (
+        "Извлеки из договора данные строго по тексту. "
+        "Если поле не упоминается явно — оставь пустым.\n\n"
+        f"Формат:\n{fmt}\n\n"
         f"Договор:\n{req.text}"
     )
-
-    raw = await chat(system=system, user=user)
+    raw1 = await chat(system=_EXTRACT_SYSTEM, user=extract_user, temperature=0.1)
 
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
+        data = _parse_contract(raw1)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 1)")
+
+    # Проход 2: верификация
+    verify_user = (
+        "Исходный текст договора:\n"
+        f"{req.text}\n\n"
+        "---\n"
+        "Извлечённые данные:\n"
+        f"{json.dumps(data, ensure_ascii=False, indent=2)}\n\n"
+        "Удали из каждого поля всё, что явно не подтверждается текстом выше. "
+        f"Верни исправленный JSON в том же формате:\n{fmt}"
+    )
+    raw2 = await chat(system=_VERIFY_SYSTEM, user=verify_user, temperature=0.1)
+
+    try:
+        verified = _parse_contract(raw2)
         return ContractResponse(
-            parties=data.get("parties", []),
-            subject=data.get("subject", ""),
-            key_conditions=data.get("key_conditions", []),
-            obligations=[Obligation(**o) for o in data.get("obligations", [])],
-            risks=data.get("risks", []),
-            deadlines=data.get("deadlines", []),
-            penalties=data.get("penalties", []),
+            parties=verified.get("parties", []),
+            subject=verified.get("subject", ""),
+            key_conditions=verified.get("key_conditions", []),
+            obligations=[Obligation(**o) for o in verified.get("obligations", [])],
+            risks=verified.get("risks", []),
+            deadlines=verified.get("deadlines", []),
+            penalties=verified.get("penalties", []),
         )
     except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
+        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 2)")

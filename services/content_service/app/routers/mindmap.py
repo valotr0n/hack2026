@@ -49,7 +49,7 @@ async def generate_mindmap(req: MindmapRequest) -> MindmapResponse:
         f"Текст:\n{req.text}"
     )
 
-    raw = await chat(system=system, user=user)
+    raw = await chat(system=system, user=user, temperature=0.3)
 
     try:
         start = raw.find("{")

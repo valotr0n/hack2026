@@ -40,14 +40,16 @@ def _style_prompt(style: str) -> str:
 _SYSTEM = (
     "Ты — ассистент по анализу документов. "
     "Используй ТОЛЬКО информацию из предоставленного текста. "
-    "Не добавляй знания из других источников. "
+    "Не добавляй знания из других источников, не додумывай факты. "
+    "Если какой-то аспект не освещён в тексте — не упоминай его. "
     "Отвечай на русском языке."
 )
 
 _CHUNK_SYSTEM = (
     "Ты — ассистент по анализу документов. "
     "Создай краткое промежуточное резюме ТОЛЬКО по предоставленному фрагменту. "
-    "Сохраняй все ключевые факты, цифры и имена. "
+    "Сохраняй все ключевые факты, цифры и имена точно как в тексте. "
+    "Не добавляй интерпретации и выводы которых нет во фрагменте. "
     "Отвечай на русском языке."
 )
 
@@ -55,6 +57,7 @@ _META_SYSTEM = (
     "Ты — ассистент по синтезу документов. "
     "Перед тобой набор промежуточных резюме разных частей одного большого документа. "
     "Составь единое связное итоговое резюме по всем частям. "
+    "Используй только то, что есть в резюме — не добавляй от себя. "
     "Отвечай на русском языке."
 )
 
@@ -86,7 +89,7 @@ async def _summarize_chunk(chunk: str, part_label: str, style_prompt: str) -> st
         f"Стиль итогового документа: {style_prompt}\n\n"
         f"Фрагмент:\n{chunk}"
     )
-    return await chat(system=_CHUNK_SYSTEM, user=user)
+    return await chat(system=_CHUNK_SYSTEM, user=user, temperature=0.3)
 
 
 async def _hierarchical_summary(text: str, style: str) -> str:
@@ -94,7 +97,7 @@ async def _hierarchical_summary(text: str, style: str) -> str:
 
     if len(text) <= _CHUNK_SIZE:
         # Текст небольшой — один проход
-        return await chat(system=_SYSTEM, user=f"{sp}\n\nТекст:\n{text}")
+        return await chat(system=_SYSTEM, user=f"{sp}\n\nТекст:\n{text}", temperature=0.3)
 
     # Первый проход: параллельная суммаризация каждого чанка
     chunks = _split_text(text, _CHUNK_SIZE)
@@ -117,6 +120,7 @@ async def _hierarchical_summary(text: str, style: str) -> str:
             chat(
                 system=_META_SYSTEM,
                 user=f"Промежуточные резюме (группа {i + 1} из {len(meta_chunks)}):\n\n{mc}",
+                temperature=0.3,
             )
             for i, mc in enumerate(meta_chunks)
         ]
@@ -129,7 +133,7 @@ async def _hierarchical_summary(text: str, style: str) -> str:
         "Составь единое итоговое саммари, устрани повторы, сохрани все ключевые факты.\n\n"
         f"{combined}"
     )
-    return await chat(system=_META_SYSTEM, user=user_final)
+    return await chat(system=_META_SYSTEM, user=user_final, temperature=0.3)
 
 
 @router.post(

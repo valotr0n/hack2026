@@ -97,7 +97,7 @@ async def generate_questions(req: QuestionsRequest) -> QuestionsResponse:
         f"Документ:\n{req.text}"
     )
 
-    raw = await chat(system=system, user=user)
+    raw = await chat(system=system, user=user, temperature=0.3)
 
     try:
         start = raw.find("{")
