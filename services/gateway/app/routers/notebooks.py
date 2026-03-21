@@ -33,7 +33,7 @@ import json as _json
 
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
-    for field in ("mindmap", "flashcards", "podcast_script"):
+    for field in ("mindmap", "flashcards", "podcast_script", "contract", "knowledge_graph"):
         raw = nb.get(field)
         if isinstance(raw, str):
             try:
@@ -110,6 +110,8 @@ class NotebookResponse(BaseModel):
     flashcards: list | None = None
     podcast_url: str | None = None
     podcast_script: list | None = None
+    contract: dict | None = None
+    knowledge_graph: dict | None = None
 
 
 class ChatMessage(BaseModel):
@@ -132,6 +134,17 @@ class FlashcardsRequest(BaseModel):
 
 class PodcastRequest(BaseModel):
     tone: str = "popular"  # scientific | popular
+
+
+class QuizCheckRequest(BaseModel):
+    question: str
+    correct_answer: str
+    user_answer: str
+
+
+class MultiSearchRequest(BaseModel):
+    notebook_ids: list[str] = Field(min_length=1, max_length=10)
+    query: str
 
 
 # ── Notebook CRUD ─────────────────────────────────────────────────────────────
@@ -565,5 +578,196 @@ async def podcast(
         await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
         await save_notebook_content(settings.db_path, notebook_id, "podcast_script", _json.dumps(data.get("script", []), ensure_ascii=False))
         return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/contract",
+    summary="Анализ договора",
+    description="""
+Извлекает из документов блокнота структурированный анализ договора:
+стороны, предмет, ключевые условия, обязательства, риски, сроки, штрафы.
+
+Идеально для юридических документов, кредитных договоров, соглашений.
+
+**Ответ:**
+```json
+{
+  "parties": ["ООО Ромашка", "Банк"],
+  "subject": "Кредитный договор на сумму 5 млн руб.",
+  "key_conditions": ["Ставка 14% годовых", "Срок 36 месяцев"],
+  "obligations": [{"party": "Заёмщик", "text": "Погашать ежемесячно"}],
+  "risks": ["Штраф 0.1% в день за просрочку"],
+  "deadlines": ["Дата первого платежа — 01.05.2026"],
+  "penalties": ["Неустойка 1% от суммы долга"]
+}
+```
+    """,
+)
+async def contract(
+    notebook_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(_content("/contract"), json={"text": text})
+        resp.raise_for_status()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "contract", _json.dumps(data, ensure_ascii=False))
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/knowledge-graph",
+    summary="Граф знаний",
+    description="""
+Строит граф знаний из документов блокнота: извлекает сущности (персоны, организации, концепции, события)
+и связи между ними. Результат можно визуализировать через D3.js, Cytoscape, vis.js.
+
+**Ответ:**
+```json
+{
+  "nodes": [
+    {"id": "bank", "label": "Банк Центр-Инвест", "type": "org"},
+    {"id": "credit_rate", "label": "Ставка 14%", "type": "term"}
+  ],
+  "edges": [
+    {"source": "bank", "target": "credit_rate", "label": "устанавливает"}
+  ]
+}
+```
+    """,
+)
+async def knowledge_graph(
+    notebook_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+    text = await _notebook_text(client, notebook_id)
+
+    try:
+        resp = await client.post(_content("/knowledge-graph"), json={"text": text})
+        resp.raise_for_status()
+        data = resp.json()
+        await save_notebook_content(settings.db_path, notebook_id, "knowledge_graph", _json.dumps(data, ensure_ascii=False))
+        return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{notebook_id}/flashcards/check",
+    summary="Проверить ответ (автотест)",
+    description="""
+Проверяет ответ пользователя на вопрос флэш-карточки. LLM оценивает правильность,
+выставляет оценку 0–1 и объясняет ошибки. Геймификация обучения.
+
+**Пример запроса:**
+```json
+{
+  "question": "Что такое RAG?",
+  "correct_answer": "Retrieval-Augmented Generation — метод...",
+  "user_answer": "Это когда нейросеть ищет информацию в базе данных"
+}
+```
+
+**Ответ:**
+```json
+{
+  "is_correct": true,
+  "score": 0.8,
+  "feedback": "Верно в целом! Ты уловил суть, но не упомянул..."
+}
+```
+    """,
+)
+async def check_flashcard(
+    notebook_id: str,
+    req: QuizCheckRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    await _owned_notebook(notebook_id, user_id)
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    try:
+        resp = await client.post(
+            _content("/flashcards/check"),
+            json={
+                "question": req.question,
+                "correct_answer": req.correct_answer,
+                "user_answer": req.user_answer,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/search",
+    summary="Поиск по нескольким блокнотам",
+    description="""
+Задаёт вопрос сразу по нескольким блокнотам одновременно. LLM анализирует
+объединённый контекст всех документов и формирует единый ответ.
+
+**Пример запроса:**
+```json
+{
+  "notebook_ids": ["id1", "id2", "id3"],
+  "query": "Какая ставка рефинансирования упоминается в договорах?"
+}
+```
+
+**Ответ:**
+```json
+{
+  "answer": "В договоре с ООО Ромашка указана ставка 14%...",
+  "notebooks_searched": ["Договор №1", "Кредитный договор", "Допсоглашение"]
+}
+```
+    """,
+)
+async def multi_search(
+    req: MultiSearchRequest,
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> dict[str, Any]:
+    client: httpx.AsyncClient = request.app.state.http_client
+
+    texts: list[str] = []
+    titles: list[str] = []
+
+    for nb_id in req.notebook_ids:
+        nb = await _owned_notebook(nb_id, user_id)
+        titles.append(nb["title"])
+        try:
+            text = await _notebook_text(client, nb_id)
+            texts.append(f"[Блокнот: {nb['title']}]\n{text}")
+        except HTTPException:
+            texts.append(f"[Блокнот: {nb['title']}]\n(документы не загружены)")
+
+    combined = "\n\n---\n\n".join(texts)
+    if len(combined) > _MAX_TEXT_LENGTH:
+        combined = combined[:_MAX_TEXT_LENGTH].rsplit(" ", 1)[0]
+
+    try:
+        resp = await client.post(
+            _content("/answer"),
+            json={"text": combined, "question": req.query},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {"answer": data.get("answer", ""), "notebooks_searched": titles}
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
