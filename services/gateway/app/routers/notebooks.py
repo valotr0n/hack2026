@@ -256,7 +256,7 @@ async def delete(
     "/{notebook_id}/sources",
     status_code=status.HTTP_201_CREATED,
     summary="Загрузить документ",
-    description="Загружает файл (PDF, DOCX, TXT) в блокнот. Документ автоматически разбивается на чанки и индексируется для поиска. Возвращает `id` источника.",
+    description="Загружает файл (PDF, DOCX, TXT, CSV, XLSX) в блокнот. Документ автоматически разбивается на чанки и индексируется для поиска. Таблицы конвертируются в текст. Возвращает `id` источника.",
 )
 async def upload_source(
     notebook_id: str,
