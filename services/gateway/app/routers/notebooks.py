@@ -536,7 +536,6 @@ async def chat(
 
     async def _stream():
         accumulated: list[str] = []
-        sources: list[str] = []
         try:
             async for chunk in rag_resp.aiter_bytes():
                 yield chunk
@@ -550,15 +549,13 @@ async def chat(
                         parsed = _json_mod.loads(data)
                         if delta := parsed.get("delta"):
                             accumulated.append(delta)
-                        if not sources and parsed.get("sources"):
-                            sources = parsed["sources"]
                     except Exception:
                         pass
         finally:
             await rag_resp.aclose()
             if accumulated:
                 await save_chat_message(
-                    settings.db_path, notebook_id, "assistant", "".join(accumulated), sources
+                    settings.db_path, notebook_id, "assistant", "".join(accumulated)
                 )
 
     return StreamingResponse(
