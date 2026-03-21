@@ -51,6 +51,7 @@ async def init_db(path: str) -> None:
             ("knowledge_graph", "TEXT"),
             ("timeline", "TEXT"),
             ("questions", "TEXT"),
+            ("presentation", "TEXT"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE notebooks ADD COLUMN {col} {typedef}")
@@ -131,7 +132,7 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions FROM notebooks WHERE id = ?",
+            "SELECT id, user_id, title, created_at, summary, mindmap, flashcards, podcast_url, podcast_script, contract, knowledge_graph, timeline, questions, presentation FROM notebooks WHERE id = ?",
             (notebook_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -139,7 +140,7 @@ async def get_notebook(path: str, notebook_id: str) -> dict[str, Any] | None:
 
 
 async def save_notebook_content(path: str, notebook_id: str, field: str, value: str) -> None:
-    allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script", "contract", "knowledge_graph", "timeline", "questions"}
+    allowed = {"summary", "mindmap", "flashcards", "podcast_url", "podcast_script", "contract", "knowledge_graph", "timeline", "questions", "presentation"}
     if field not in allowed:
         raise ValueError(f"Unknown field: {field}")
     async with aiosqlite.connect(path, timeout=30) as db:
@@ -225,7 +226,7 @@ async def clear_notebook_cache(path: str, notebook_id: str) -> None:
                summary = NULL, mindmap = NULL, flashcards = NULL,
                podcast_url = NULL, podcast_script = NULL,
                contract = NULL, knowledge_graph = NULL,
-               timeline = NULL, questions = NULL
+               timeline = NULL, questions = NULL, presentation = NULL
                WHERE id = ?""",
             (notebook_id,),
         )
