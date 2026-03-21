@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from ..auth import require_auth
 from ..config import settings
 from ..database import (
+    clear_notebook_cache,
     create_notebook,
     create_source,
     delete_notebook,
@@ -280,12 +281,14 @@ async def upload_source(
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
 
     rag_data = rag_resp.json()
-    return await create_source(
+    source = await create_source(
         settings.db_path,
         notebook_id,
         file.filename or "document",
         rag_data.get("chunks", 0),
     )
+    await clear_notebook_cache(settings.db_path, notebook_id)
+    return source
 
 
 @router.post(
@@ -342,12 +345,14 @@ async def transcribe_source(
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
 
     rag_data = rag_resp.json()
-    return await create_source(
+    source = await create_source(
         settings.db_path,
         notebook_id,
         txt_filename,
         rag_data.get("chunks", 0),
     )
+    await clear_notebook_cache(settings.db_path, notebook_id)
+    return source
 
 
 @router.delete(
@@ -373,6 +378,7 @@ async def remove_source(
     except Exception:
         pass
     await delete_source(settings.db_path, source_id)
+    await clear_notebook_cache(settings.db_path, notebook_id)
 
 
 # ── Chat (SSE stream) ─────────────────────────────────────────────────────────
@@ -591,6 +597,9 @@ async def podcast(
         resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(request))
         resp.raise_for_status()
         data = resp.json()
+        # Переписываем URL чтобы аудио шло через gateway, а не напрямую на content_service:8002
+        if "audio_url" in data:
+            data["audio_url"] = f"/api/content{data['audio_url']}"
         await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
         await save_notebook_content(settings.db_path, notebook_id, "podcast_script", _json.dumps(data.get("script", []), ensure_ascii=False))
         return data
