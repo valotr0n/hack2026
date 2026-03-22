@@ -3,6 +3,8 @@ services:
     image: ollama/ollama:latest
     environment:
       OLLAMA_HOST: 0.0.0.0
+      OLLAMA_NUM_CTX: 16384       # контекст 16k токенов вместо 4096
+      OLLAMA_NUM_PARALLEL: 1      # CPU — параллельность бессмысленна
     ports:
       - "11434:11434"
     volumes:

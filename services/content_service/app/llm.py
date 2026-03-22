@@ -26,6 +26,7 @@ _open_client = AsyncOpenAI(
 _closed_client = AsyncOpenAI(
     base_url=settings.ollama_base_url,
     api_key="ollama",
+    max_retries=0,
     http_client=httpx.AsyncClient(timeout=300.0),
 )
 
