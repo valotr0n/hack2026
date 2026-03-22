@@ -7,10 +7,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from .auth import require_auth
 from .config import settings
 from .database import init_db
 from .routers.auth import router as auth_router
@@ -110,6 +111,26 @@ async def log_requests(request: Request, call_next):
             status_code,
             duration_ms,
         )
+
+
+@app.get("/voices", tags=["podcast"], summary="Список доступных голосов TTS")
+async def list_voices(request: Request, user_id: str = Depends(require_auth)) -> list[dict]:
+    client: httpx.AsyncClient = request.app.state.http_client
+    resp = await client.get(f"{UPSTREAMS['content']}/voices")
+    resp.raise_for_status()
+    return resp.json()
+
+
+@app.get("/voices/{voice_id}/sample", tags=["podcast"], summary="Аудиосэмпл голоса")
+async def voice_sample(voice_id: str, request: Request, user_id: str = Depends(require_auth)):
+    client: httpx.AsyncClient = request.app.state.http_client
+    resp = await client.get(f"{UPSTREAMS['content']}/voices/{voice_id}/sample")
+    resp.raise_for_status()
+    return StreamingResponse(
+        resp.aiter_bytes(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/")

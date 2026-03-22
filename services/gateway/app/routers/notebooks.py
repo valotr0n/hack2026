@@ -1027,43 +1027,6 @@ async def podcast(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
-@router.get(
-    "/voices",
-    summary="Список доступных голосов TTS для подкаста",
-)
-async def list_voices(
-    request: Request,
-    user_id: str = Depends(require_auth),
-) -> list[dict]:
-    client: httpx.AsyncClient = request.app.state.http_client
-    try:
-        resp = await client.get(_content("/voices"))
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
-
-
-@router.get(
-    "/voices/{voice_id}/sample",
-    summary="Аудиосэмпл голоса",
-)
-async def voice_sample(
-    voice_id: str,
-    request: Request,
-    user_id: str = Depends(require_auth),
-):
-    client: httpx.AsyncClient = request.app.state.http_client
-    try:
-        resp = await client.get(_content(f"/voices/{voice_id}/sample"))
-        resp.raise_for_status()
-        return StreamingResponse(
-            resp.aiter_bytes(),
-            media_type="audio/mpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
 @router.post(
