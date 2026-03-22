@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     vision_max_images: int = 5       # макс. картинок на документ
     vision_min_image_side: int = 100  # пропускать картинки меньше N пикселей (логотипы, линейки)
     llm_proxy: str | None = None     # например socks5://ss-proxy:1080
+    ollama_base_url: str = "http://ollama:11434/v1"
+    ollama_model: str = "qwen2.5:7b"
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

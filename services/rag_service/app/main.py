@@ -60,15 +60,25 @@ async def lifespan(app: FastAPI):
     _configure_cpu_runtime()
     embedding_model = SentenceTransformer(settings.embedder_model)
     llm_http_client = httpx.AsyncClient(verify=False, timeout=120.0, proxy=settings.llm_proxy)
-    llm_client = AsyncOpenAI(
+    open_llm_client = AsyncOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         http_client=llm_http_client,
         max_retries=0,
     )
+    closed_http_client = httpx.AsyncClient(verify=False, timeout=120.0)
+    closed_llm_client = AsyncOpenAI(
+        base_url=settings.ollama_base_url,
+        api_key="ollama",
+        http_client=closed_http_client,
+        max_retries=0,
+    )
 
     app.state.embedding_model = embedding_model
-    app.state.llm_client = llm_client
+    app.state.open_llm_client = open_llm_client
+    app.state.closed_llm_client = closed_llm_client
+    # keep legacy alias for non-chat routers
+    app.state.llm_client = open_llm_client
     vision_preload_task: asyncio.Task[None] | None = None
     if settings.vision_enabled and settings.vision_preload:
         from .vision import preload_vision_model
@@ -91,8 +101,10 @@ async def lifespan(app: FastAPI):
             vision_preload_task.cancel()
             with suppress(asyncio.CancelledError):
                 await vision_preload_task
-        await _close_resource(llm_client)
+        await _close_resource(open_llm_client)
         await _close_resource(llm_http_client)
+        await _close_resource(closed_llm_client)
+        await _close_resource(closed_http_client)
 
 
 app = FastAPI(title="RAG Service", version="0.1.0", lifespan=lifespan)

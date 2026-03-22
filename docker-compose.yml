@@ -52,6 +52,8 @@ services:
       VISION_MAX_IMAGE_SIDE: ${VISION_MAX_IMAGE_SIDE:-1024}
       VISION_MAX_IMAGES: ${VISION_MAX_IMAGES:-5}
       VISION_MIN_IMAGE_SIDE: ${VISION_MIN_IMAGE_SIDE:-100}
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
     ports:
       - "8001:8001"
     depends_on:

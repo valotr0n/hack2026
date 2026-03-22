@@ -761,6 +761,7 @@ async def chat(
                 "query": req.query,
                 "history": [m.model_dump() for m in req.history],
             },
+            headers=_contour_headers(notebook),
         )
         rag_resp = await client.send(rag_request, stream=True)
     except httpx.RequestError as exc:
