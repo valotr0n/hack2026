@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import logging
 import re
 import inspect
 import json
@@ -21,6 +22,8 @@ from sentence_transformers import SentenceTransformer
 
 from .config import settings
 from .schemas import ChatHistoryMessage
+
+logger = logging.getLogger("rag_service")
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
@@ -150,10 +153,13 @@ def build_upload_preview(full_text: str, limit: int = 500) -> str:
 
 async def extract_text_from_upload(file: UploadFile) -> str:
     from .vision import extract_image_descriptions
+    import time
 
     filename = file.filename or "document"
     suffix = Path(filename).suffix.lower()
     payload = await file.read()
+    logger.info("Extracting text filename=%s suffix=%s size_bytes=%d", filename, suffix, len(payload))
+    t0 = time.perf_counter()
 
     if suffix == ".pdf":
         reader = PdfReader(BytesIO(payload))
@@ -184,8 +190,10 @@ async def extract_text_from_upload(file: UploadFile) -> str:
     # "зави-\nсимости" → "зависимости"
     dehyphenated = re.sub(r"-\n(\S)", r"\1", text)
     normalized_text = "\n".join(line for line in dehyphenated.splitlines() if line.strip()).strip()
+    logger.info("Text extraction done filename=%s chars=%d %.2fs", filename, len(normalized_text), time.perf_counter() - t0)
 
     if settings.vision_enabled and suffix in (".pdf", ".docx"):
+        logger.info("Vision extraction started filename=%s", filename)
         image_descriptions = await extract_image_descriptions(
             payload,
             suffix,
@@ -194,8 +202,11 @@ async def extract_text_from_upload(file: UploadFile) -> str:
             settings.vision_max_image_side,
         )
         if image_descriptions:
+            logger.info("Vision extraction done filename=%s images=%d", filename, len(image_descriptions))
             visual_block = "\n\n".join(image_descriptions)
             normalized_text = f"{normalized_text}\n\n--- Визуальные элементы документа ---\n{visual_block}"
+        else:
+            logger.info("Vision extraction done filename=%s images=0", filename)
 
     if not normalized_text:
         raise HTTPException(
@@ -207,6 +218,7 @@ async def extract_text_from_upload(file: UploadFile) -> str:
 
 
 def split_text_into_chunks(full_text: str) -> list[str]:
+    logger.info("Chunking text chars=%d chunk_size=%d overlap=%d", len(full_text), CHUNK_SIZE, CHUNK_OVERLAP)
     splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     nodes = splitter.get_nodes_from_documents([Document(text=full_text)])
     chunks = [content for node in nodes if (content := node.get_content().strip())]
@@ -217,6 +229,7 @@ def split_text_into_chunks(full_text: str) -> list[str]:
             detail="Unable to split the document into chunks.",
         )
 
+    logger.info("Chunking done chunks=%d avg_chars=%.0f", len(chunks), sum(len(c) for c in chunks) / len(chunks))
     return chunks
 
 
@@ -235,6 +248,9 @@ def _encode_texts(
     texts: list[str],
     prompt_name: EmbeddingPromptName | None,
 ) -> list[list[float]]:
+    import time
+    t0 = time.perf_counter()
+    logger.info("Embedding started texts=%d batch_size=%d prompt=%s", len(texts), settings.embedding_batch_size, prompt_name)
     encode_kwargs: dict[str, Any] = {
         "convert_to_numpy": True,
         "normalize_embeddings": True,
@@ -245,6 +261,7 @@ def _encode_texts(
         encode_kwargs["prompt_name"] = prompt_name
 
     embeddings = embedding_model.encode(texts, **encode_kwargs)
+    logger.info("Embedding done texts=%d %.2fs", len(texts), time.perf_counter() - t0)
     return embeddings.tolist()
 
 
@@ -314,11 +331,13 @@ async def _qdrant_request(
 
 
 async def _create_qdrant_collection_via_rest(doc_id: str, embedding_dimension: int) -> None:
+    logger.info("Qdrant creating collection collection_id=%s dim=%d", doc_id, embedding_dimension)
     await _qdrant_request(
         "PUT",
         f"/collections/{doc_id}",
         {"vectors": {"size": embedding_dimension, "distance": "Cosine"}},
     )
+    logger.info("Qdrant collection created collection_id=%s", doc_id)
 
 
 async def _collection_exists(collection_id: str) -> bool:
@@ -338,6 +357,7 @@ async def _upsert_qdrant_points_via_rest(
     filename: str,
     source_id: str,
 ) -> None:
+    logger.info("Qdrant upserting points collection_id=%s points=%d source_id=%s", doc_id, len(chunks), source_id)
     points = [
         {
             "id": str(uuid4()),
@@ -356,6 +376,7 @@ async def _upsert_qdrant_points_via_rest(
         f"/collections/{doc_id}/points?wait=true",
         {"points": points},
     )
+    logger.info("Qdrant upsert done collection_id=%s points=%d", doc_id, len(points))
 
 
 async def create_document_collection(

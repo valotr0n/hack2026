@@ -17,6 +17,11 @@ from .routers.chat import router as chat_router
 from .routers.notebook_content import router as notebook_content_router
 from .routers.upload import router as upload_router
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
 
