@@ -12,7 +12,7 @@ logger = logging.getLogger("content_service.knowledge_graph")
 
 router = APIRouter()
 
-_CHUNK_SIZE = 20_000
+_CHUNK_SIZE = 8_000
 
 
 class KnowledgeGraphRequest(BaseModel):
@@ -41,15 +41,6 @@ _EXTRACT_SYSTEM = (
     "Извлекай только смысловые сущности из содержания текста — понятия, явления, процессы, организации, персоны. "
     "Игнорируй библиографические метаданные: ISBN, УДК, ББК, даты публикации, издательства, грифы. "
     "Все подписи (label) и рёбра (label) — строго на русском языке. "
-    "Отвечай строго в формате JSON без лишнего текста."
-)
-
-_MERGE_SYSTEM = (
-    "Ты — эксперт по слиянию графов знаний. "
-    "Тебе даны узлы и рёбра из нескольких фрагментов одного документа. "
-    "Объедини их: удали дублирующиеся узлы (одна сущность — один узел с уникальным id), "
-    "добавь связи между узлами из разных фрагментов если они очевидно связаны. "
-    "Все id — уникальные slug латиницей, все label — на русском языке. "
     "Отвечай строго в формате JSON без лишнего текста."
 )
 
@@ -93,16 +84,17 @@ def _parse_graph(raw: str) -> dict:
 
 
 async def _extract_chunk_graph(chunk: str, part_label: str) -> dict:
-    user = (
-        f"{part_label}\n\n"
-        f"Извлеки граф знаний из этого фрагмента. Верни JSON:\n{_GRAPH_FORMAT}\n\n"
-        f"Правила:\n{_EXTRACT_RULES}\n"
-        f"Фрагмент:\n{chunk}"
-    )
-    raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.3)
     try:
+        user = (
+            f"{part_label}\n\n"
+            f"Извлеки граф знаний из этого фрагмента. Верни JSON:\n{_GRAPH_FORMAT}\n\n"
+            f"Правила:\n{_EXTRACT_RULES}\n"
+            f"Фрагмент:\n{chunk}"
+        )
+        raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.3)
         return _parse_graph(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("Chunk extraction failed (%s), skipping", type(e).__name__)
         return {"nodes": [], "edges": []}
 
 
@@ -131,31 +123,26 @@ async def _hierarchical_knowledge_graph(text: str) -> dict:
     all_edges = [edge for g in partial for edge in g.get("edges", [])]
     logger.info("KnowledgeGraph map done nodes=%d edges=%d", len(all_nodes), len(all_edges))
 
-    combined = json.dumps(
-        {"nodes": all_nodes, "edges": all_edges},
-        ensure_ascii=False,
-        indent=2,
-    )
-    merge_user = (
-        "Ниже собраны узлы и рёбра из всех фрагментов одного документа. "
-        "Объедини их в единый связный граф: удали дублирующиеся сущности, "
-        "нормализуй id (один уникальный slug на каждую сущность), "
-        "добавь связи между сущностями из разных фрагментов где это очевидно. "
-        f"Верни JSON в том же формате:\n{_GRAPH_FORMAT}\n\n"
-        f"Собранные данные:\n{combined}"
-    )
-    raw = await chat(system=_MERGE_SYSTEM, user=merge_user, temperature=0.3)
-    try:
-        result = _parse_graph(raw)
-        logger.info(
-            "KnowledgeGraph merge done nodes=%d edges=%d",
-            len(result.get("nodes", [])),
-            len(result.get("edges", [])),
-        )
-        return result
-    except Exception:
-        logger.warning("KnowledgeGraph merge parse failed, returning unmerged")
-        return {"nodes": all_nodes, "edges": all_edges}
+    # Программная дедупликация nodes по id, edges по (source, target, label)
+    seen_nodes: set[str] = set()
+    deduped_nodes: list[dict] = []
+    for n in all_nodes:
+        nid = n.get("id", "").strip().lower()
+        if nid and nid not in seen_nodes:
+            seen_nodes.add(nid)
+            deduped_nodes.append(n)
+
+    seen_edges: set[tuple[str, str, str]] = set()
+    deduped_edges: list[dict] = []
+    for e in all_edges:
+        key = (e.get("source", ""), e.get("target", ""), e.get("label", "").strip().lower())
+        # Оставляем только рёбра между известными узлами
+        if key not in seen_edges and e.get("source") in seen_nodes and e.get("target") in seen_nodes:
+            seen_edges.add(key)
+            deduped_edges.append(e)
+
+    logger.info("KnowledgeGraph dedup done nodes=%d edges=%d", len(deduped_nodes), len(deduped_edges))
+    return {"nodes": deduped_nodes, "edges": deduped_edges}
 
 
 @router.post(

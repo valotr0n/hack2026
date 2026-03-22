@@ -13,7 +13,7 @@ logger = logging.getLogger("content_service.questions")
 
 router = APIRouter()
 
-_CHUNK_SIZE = 20_000
+_CHUNK_SIZE = 8_000
 
 
 class QuestionsRequest(BaseModel):
@@ -38,14 +38,6 @@ _CONTEXT_PROMPTS = {
     "financial": "финансового аналитика, изучающего отчётность компании",
     "general": "эксперта-аналитика, изучающего документ",
 }
-
-_MERGE_SYSTEM = (
-    "Ты — старший аналитик, объединяющий вопросы из нескольких фрагментов документа. "
-    "Удали дублирующиеся и похожие вопросы (оставь лучшую формулировку). "
-    "Расставь приоритеты по всему документу. "
-    "Напиши итоговый summary о главных пробелах документа. "
-    "Отвечай строго в формате JSON без лишнего текста."
-)
 
 _QUESTIONS_FORMAT = (
     '{"questions": [{"question": "текст вопроса", '
@@ -80,28 +72,29 @@ def _parse_questions(raw: str) -> dict:
 
 
 async def _extract_chunk_questions(chunk: str, part_label: str, role: str, per_chunk: int) -> dict:
-    system = (
-        f"Ты — опытный {role}. "
-        "Твоя задача — найти пробелы, неясности и риски в этом фрагменте документа. "
-        "Отвечай строго в формате JSON без лишнего текста."
-    )
-    user = (
-        f"{part_label}\n\n"
-        "Проанализируй этот фрагмент и составь список вопросов, на которые фрагмент "
-        "НЕ даёт чёткого ответа или которые необходимо уточнить.\n\n"
-        f"Верни JSON:\n{_QUESTIONS_FORMAT}\n\n"
-        "Правила:\n"
-        "- Вопросы high priority — без ответа нельзя принять решение\n"
-        "- Вопросы medium — важны, но не блокирующие\n"
-        "- Вопросы low — желательно уточнить\n"
-        f"- Максимум {per_chunk} вопросов по этому фрагменту\n"
-        "- Вопросы должны быть конкретными, не абстрактными\n\n"
-        f"Фрагмент:\n{chunk}"
-    )
-    raw = await chat(system=system, user=user, temperature=0.3)
     try:
+        system = (
+            f"Ты — опытный {role}. "
+            "Твоя задача — найти пробелы, неясности и риски в этом фрагменте документа. "
+            "Отвечай строго в формате JSON без лишнего текста."
+        )
+        user = (
+            f"{part_label}\n\n"
+            "Проанализируй этот фрагмент и составь список вопросов, на которые фрагмент "
+            "НЕ даёт чёткого ответа или которые необходимо уточнить.\n\n"
+            f"Верни JSON:\n{_QUESTIONS_FORMAT}\n\n"
+            "Правила:\n"
+            "- Вопросы high priority — без ответа нельзя принять решение\n"
+            "- Вопросы medium — важны, но не блокирующие\n"
+            "- Вопросы low — желательно уточнить\n"
+            f"- Максимум {per_chunk} вопросов по этому фрагменту\n"
+            "- Вопросы должны быть конкретными, не абстрактными\n\n"
+            f"Фрагмент:\n{chunk}"
+        )
+        raw = await chat(system=system, user=user, temperature=0.3)
         return _parse_questions(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("Chunk extraction failed (%s), skipping", type(e).__name__)
         return {"questions": [], "summary": ""}
 
 
@@ -147,25 +140,23 @@ async def _hierarchical_questions(text: str, context: str) -> dict:
     if not all_questions:
         return {"questions": [], "summary": "Документ не содержит информации для анализа."}
 
-    combined = json.dumps({"questions": all_questions}, ensure_ascii=False, indent=2)
-    merge_user = (
-        f"Ты анализируешь документ с позиции {role}.\n"
-        "Ниже собраны вопросы из всех фрагментов одного документа. "
-        "Удали дублирующиеся и похожие вопросы (оставь лучшую формулировку). "
-        "Итоговый список: минимум 5, максимум 15 вопросов. "
-        "Напиши итоговый summary о главных пробелах всего документа. "
-        f"Верни JSON в том же формате:\n{_QUESTIONS_FORMAT}\n\n"
-        f"Все вопросы:\n{combined}"
-    )
-    raw = await chat(system=_MERGE_SYSTEM, user=merge_user, temperature=0.3)
-    try:
-        result = _parse_questions(raw)
-        logger.info("Questions merge done questions=%d", len(result.get("questions", [])))
-        return result
-    except Exception:
-        logger.warning("Questions merge parse failed, returning unmerged")
-        partial_summaries = " ".join(p.get("summary", "") for p in partial if p.get("summary"))
-        return {"questions": all_questions[:15], "summary": partial_summaries}
+    # Программная дедупликация по тексту вопроса — без LLM-вызова
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for q in all_questions:
+        key = q.get("question", "").strip().lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(q)
+
+    # Сортируем: high → medium → low
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    deduped.sort(key=lambda q: priority_order.get(q.get("priority", "low"), 2))
+
+    result_questions = deduped[:15]
+    partial_summaries = " ".join(p.get("summary", "") for p in partial if p.get("summary"))
+    logger.info("Questions dedup done questions=%d", len(result_questions))
+    return {"questions": result_questions, "summary": partial_summaries}
 
 
 @router.post(

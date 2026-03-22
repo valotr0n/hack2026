@@ -13,7 +13,7 @@ logger = logging.getLogger("content_service.flashcards")
 
 router = APIRouter()
 
-_CHUNK_SIZE = 20_000
+_CHUNK_SIZE = 8_000
 
 
 class FlashcardsRequest(BaseModel):
@@ -35,14 +35,6 @@ _EXTRACT_SYSTEM = (
     "Используй ТОЛЬКО информацию из предоставленного текста. "
     "Если ответ на вопрос нельзя найти в тексте — не создавай эту карточку. "
     "Ответы должны быть точными цитатами или перефразировками из текста, без домысливания. "
-    "Отвечай строго в формате JSON, без лишнего текста."
-)
-
-_MERGE_SYSTEM = (
-    "Ты — редактор учебных материалов. "
-    "Тебе даны карточки из нескольких фрагментов одного документа. "
-    "Удали дублирующиеся карточки (похожий вопрос или ответ). "
-    "Оставь лучшие карточки равномерно охватывающие весь документ. "
     "Отвечай строго в формате JSON, без лишнего текста."
 )
 
@@ -83,17 +75,18 @@ def _parse_flashcards(raw: str) -> list[dict]:
 
 
 async def _extract_chunk_flashcards(chunk: str, part_label: str, per_chunk: int) -> list[dict]:
-    user = (
-        f"{part_label}\n\n"
-        f"Создай {per_chunk} карточек для самопроверки на основе этого фрагмента.\n"
-        f"Правила:\n{_EXTRACT_RULES}\n"
-        f"Верни JSON:\n{_CARD_FORMAT}\n\n"
-        f"Фрагмент:\n{chunk}"
-    )
-    raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.2)
     try:
+        user = (
+            f"{part_label}\n\n"
+            f"Создай {per_chunk} карточек для самопроверки на основе этого фрагмента.\n"
+            f"Правила:\n{_EXTRACT_RULES}\n"
+            f"Верни JSON:\n{_CARD_FORMAT}\n\n"
+            f"Фрагмент:\n{chunk}"
+        )
+        raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.2)
         return _parse_flashcards(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("Chunk extraction failed (%s), skipping", type(e).__name__)
         return []
 
 
@@ -127,22 +120,16 @@ async def _hierarchical_flashcards(text: str, count: int) -> list[dict]:
     if not all_cards:
         return []
 
-    combined = json.dumps({"flashcards": all_cards}, ensure_ascii=False, indent=2)
-    merge_user = (
-        f"Ниже собраны карточки из всех фрагментов одного документа. "
-        f"Удали дублирующиеся карточки. Оставь ровно {count} лучших карточек, "
-        "равномерно охватывающих весь документ (не только начало). "
-        f"Верни JSON:\n{_CARD_FORMAT}\n\n"
-        f"Все карточки:\n{combined}"
-    )
-    raw = await chat(system=_MERGE_SYSTEM, user=merge_user, temperature=0.2)
-    try:
-        result = _parse_flashcards(raw)
-        logger.info("Flashcards merge done cards=%d", len(result))
-        return result
-    except Exception:
-        logger.warning("Flashcards merge parse failed, returning unmerged")
-        return all_cards[:count]
+    # Программная дедупликация по вопросу — без LLM-вызова
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for c in all_cards:
+        key = c.get("question", "").strip().lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(c)
+    logger.info("Flashcards dedup done cards=%d -> returning %d", len(deduped), min(count, len(deduped)))
+    return deduped[:count]
 
 
 @router.post("/flashcards", response_model=FlashcardsResponse)

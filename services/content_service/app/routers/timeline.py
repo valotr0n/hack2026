@@ -12,7 +12,7 @@ logger = logging.getLogger("content_service.timeline")
 
 router = APIRouter()
 
-_CHUNK_SIZE = 20_000
+_CHUNK_SIZE = 8_000
 
 
 class TimelineRequest(BaseModel):
@@ -35,13 +35,6 @@ _EXTRACT_SYSTEM = (
     "Извлекай ТОЛЬКО те события и даты, которые явно указаны в тексте. "
     "Запрещено вычислять или предполагать даты, которых нет в тексте. "
     "Если дата относительная ('через 30 дней') — указывай дословно как в тексте. "
-    "Отвечай строго в формате JSON без лишнего текста."
-)
-
-_MERGE_SYSTEM = (
-    "Ты — аналитик, объединяющий хронологические данные из нескольких фрагментов одного документа. "
-    "Удали точные дубликаты (одно и то же событие упомянуто в разных фрагментах). "
-    "Отсортируй события хронологически. "
     "Отвечай строго в формате JSON без лишнего текста."
 )
 
@@ -85,16 +78,17 @@ def _parse_events(raw: str) -> list[dict]:
 
 
 async def _extract_chunk_events(chunk: str, part_label: str) -> list[dict]:
-    user = (
-        f"{part_label}\n\n"
-        f"Извлеки все события с датами из этого фрагмента и верни JSON:\n{_EVENT_FORMAT}\n\n"
-        f"Правила:\n{_EXTRACT_RULES}\n"
-        f"Фрагмент:\n{chunk}"
-    )
-    raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.1)
     try:
+        user = (
+            f"{part_label}\n\n"
+            f"Извлеки все события с датами из этого фрагмента и верни JSON:\n{_EVENT_FORMAT}\n\n"
+            f"Правила:\n{_EXTRACT_RULES}\n"
+            f"Фрагмент:\n{chunk}"
+        )
+        raw = await chat(system=_EXTRACT_SYSTEM, user=user, temperature=0.1)
         return _parse_events(raw)
-    except Exception:
+    except Exception as e:
+        logger.warning("Chunk extraction failed (%s), skipping", type(e).__name__)
         return []
 
 
@@ -123,24 +117,16 @@ async def _hierarchical_timeline(text: str) -> list[dict]:
     all_events = [e for events in partial for e in events]
     logger.info("Timeline map done total_events=%d", len(all_events))
 
-    if not all_events:
-        return []
-
-    combined = json.dumps({"events": all_events}, ensure_ascii=False, indent=2)
-    merge_user = (
-        "Ниже собраны события из всех фрагментов одного документа. "
-        "Удали точные дубликаты. Отсортируй хронологически. "
-        f"Верни JSON в том же формате:\n{_EVENT_FORMAT}\n\n"
-        f"Все события:\n{combined}"
-    )
-    raw = await chat(system=_MERGE_SYSTEM, user=merge_user, temperature=0.1)
-    try:
-        result = _parse_events(raw)
-        logger.info("Timeline merge done events=%d", len(result))
-        return result
-    except Exception:
-        logger.warning("Timeline merge parse failed, returning unmerged")
-        return all_events
+    # Программная дедупликация по (date, title) — без LLM-вызова
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict] = []
+    for e in all_events:
+        key = (e.get("date", "").strip().lower(), e.get("title", "").strip().lower())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(e)
+    logger.info("Timeline dedup done events=%d", len(deduped))
+    return deduped
 
 
 @router.post(
