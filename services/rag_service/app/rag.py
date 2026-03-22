@@ -200,6 +200,8 @@ async def extract_text_from_upload(file: UploadFile) -> str:
             settings.vision_model_id,
             settings.vision_max_new_tokens,
             settings.vision_max_image_side,
+            max_images=settings.vision_max_images,
+            min_image_side=settings.vision_min_image_side,
         )
         if image_descriptions:
             logger.info("Vision extraction done filename=%s images=%d", filename, len(image_descriptions))

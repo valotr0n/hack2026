@@ -178,12 +178,27 @@ async def preload_vision_model(model_id: str, max_new_tokens: int, max_image_sid
     logger.info("Background vision preload finished in %.2fs", perf_counter() - started_at)
 
 
+def _is_image_large_enough(img_bytes: bytes, min_side: int) -> bool:
+    """Возвращает True если картинка крупнее порога (не логотип/линейка)."""
+    if min_side <= 0:
+        return True
+    try:
+        from PIL import Image
+        from io import BytesIO as _BytesIO
+        img = Image.open(_BytesIO(img_bytes))
+        return min(img.size) >= min_side
+    except Exception:
+        return True  # не можем прочитать — пусть идёт в обработку
+
+
 async def extract_image_descriptions(
     payload: bytes,
     suffix: str,
     model_id: str,
     max_new_tokens: int,
     max_image_side: int,
+    max_images: int = 5,
+    min_image_side: int = 100,
 ) -> list[str]:
     """Извлекает изображения из PDF/DOCX и возвращает их текстовые описания через A-Vision."""
     if suffix == ".pdf":
@@ -196,8 +211,25 @@ async def extract_image_descriptions(
     if not image_bytes_list:
         return []
 
+    total_found = len(image_bytes_list)
+
+    # Фильтруем мелкие (логотипы, линейки, иконки)
+    image_bytes_list = [b for b in image_bytes_list if _is_image_large_enough(b, min_image_side)]
+    filtered_out = total_found - len(image_bytes_list)
+
+    # Берём не более max_images
+    if max_images > 0 and len(image_bytes_list) > max_images:
+        image_bytes_list = image_bytes_list[:max_images]
+
+    if not image_bytes_list:
+        logger.info("Found %d image(s), all filtered out (too small), skipping vision.", total_found)
+        return []
+
     started_at = perf_counter()
-    logger.info("Found %d image(s) in document, describing via A-Vision...", len(image_bytes_list))
+    logger.info(
+        "Found %d image(s) in document (%d filtered as too small, %d will be described), describing via A-Vision...",
+        total_found, filtered_out, len(image_bytes_list),
+    )
 
     descriptions: list[str] = []
     for i, img_bytes in enumerate(image_bytes_list, 1):

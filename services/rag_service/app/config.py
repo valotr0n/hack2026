@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     vision_preload: bool = True
     vision_max_new_tokens: int = 64
     vision_max_image_side: int = 1024
+    vision_max_images: int = 5       # макс. картинок на документ
+    vision_min_image_side: int = 100  # пропускать картинки меньше N пикселей (логотипы, линейки)
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
