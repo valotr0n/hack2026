@@ -845,11 +845,8 @@ async def summary(
     req: SummaryRequest,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("summary"):
-        return {"summary": notebook["summary"]}
     client: httpx.AsyncClient = request.app.state.http_client
     # Для иерархического саммари нужен полный текст без ограничения
     text = await _notebook_text(client, notebook_id, max_length=None)
@@ -902,14 +899,8 @@ async def mindmap(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("mindmap"):
-        try:
-            return _json.loads(notebook["mindmap"])
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -949,14 +940,8 @@ async def flashcards(
     req: FlashcardsRequest,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("flashcards"):
-        try:
-            return {"flashcards": _json.loads(notebook["flashcards"])}
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
@@ -996,15 +981,8 @@ async def podcast(
     req: PodcastRequest,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("podcast_url"):
-        try:
-            script = _json.loads(notebook["podcast_script"]) if notebook.get("podcast_script") else []
-            return {"audio_url": notebook["podcast_url"], "script": script}
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id)
 
@@ -1051,14 +1029,8 @@ async def contract(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("contract"):
-        try:
-            return _json.loads(notebook["contract"])
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
@@ -1099,14 +1071,8 @@ async def knowledge_graph(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("knowledge_graph"):
-        try:
-            return _json.loads(notebook["knowledge_graph"])
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
@@ -1263,14 +1229,8 @@ async def timeline(
     notebook_id: str,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("timeline"):
-        try:
-            return _json.loads(notebook["timeline"])
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
@@ -1324,14 +1284,8 @@ async def generate_questions(
     req: QuestionsRequest,
     request: Request,
     user_id: str = Depends(require_auth),
-    force: bool = Query(False, description="Принудительно пересчитать, игнорируя кэш"),
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
-    if not force and notebook.get("questions"):
-        try:
-            return _json.loads(notebook["questions"])
-        except Exception:
-            pass
     client: httpx.AsyncClient = request.app.state.http_client
     text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
