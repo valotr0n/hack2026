@@ -23,7 +23,18 @@ _STOPWORDS = {
 }
 
 
-def strip_code_fences(raw: str) -> str:
+def strip_code_fences(raw: object | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, (dict, list)):
+        return json.dumps(raw, ensure_ascii=False)
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            raw = str(raw)
+    if not isinstance(raw, str):
+        raw = str(raw)
     return re.sub(
         r"^\s*```(?:json)?\s*|\s*```\s*$",
         "",
@@ -32,7 +43,9 @@ def strip_code_fences(raw: str) -> str:
     ).strip()
 
 
-def parse_json_payload(raw: str) -> object | None:
+def parse_json_payload(raw: object | None) -> object | None:
+    if isinstance(raw, (dict, list)):
+        return raw
     cleaned = strip_code_fences(raw)
     if not cleaned:
         return None
