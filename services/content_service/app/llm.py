@@ -12,8 +12,8 @@ from .config import settings
 
 logger = logging.getLogger("content_service.llm")
 
-# Не более 2 одновременных LLM-вызовов — API обрабатывает запросы последовательно
-_llm_semaphore = asyncio.Semaphore(2)
+# Последовательные LLM-вызовы — API обрабатывает запросы последовательно, параллельность бессмысленна
+_llm_semaphore = asyncio.Semaphore(1)
 
 # Переменная контура для текущего запроса (устанавливается middleware)
 contour_var: contextvars.ContextVar[str] = contextvars.ContextVar("contour", default="open")
