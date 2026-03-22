@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -128,6 +129,20 @@ async def _hierarchical_timeline(text: str) -> list[dict]:
         if key not in seen:
             seen.add(key)
             deduped.append(e)
+
+    # Сортировка по дате: извлекаем DD, MM, YYYY из строки даты
+    def _sort_key(e: dict) -> tuple[int, int, int]:
+        date_str = e.get("date", "")
+        nums = re.findall(r"\d+", date_str)
+        # Пробуем определить год (4 цифры), месяц, день
+        year = next((int(n) for n in nums if len(n) == 4), 9999)
+        # Формат DD.MM.YYYY — второй двузначный = месяц, первый = день
+        two_digit = [int(n) for n in nums if len(n) <= 2 and 1 <= int(n) <= 99]
+        month = two_digit[1] if len(two_digit) >= 2 else 0
+        day = two_digit[0] if len(two_digit) >= 1 else 0
+        return (year, month, day)
+
+    deduped.sort(key=_sort_key)
     logger.info("Timeline dedup done events=%d", len(deduped))
     return deduped
 
