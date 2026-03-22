@@ -943,7 +943,7 @@ async def flashcards(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
+    text = await _notebook_text(client, notebook_id, max_length=None)
 
     try:
         resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(notebook))
@@ -1074,7 +1074,7 @@ async def knowledge_graph(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
+    text = await _notebook_text(client, notebook_id, max_length=None)
 
     try:
         resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1232,7 +1232,7 @@ async def timeline(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
+    text = await _notebook_text(client, notebook_id, max_length=None)
 
     try:
         resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1287,7 +1287,7 @@ async def generate_questions(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
+    text = await _notebook_text(client, notebook_id, max_length=None)
 
     try:
         resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook), timeout=300.0)
