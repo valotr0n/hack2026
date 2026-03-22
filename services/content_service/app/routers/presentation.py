@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from ..config import settings
+from ..json_utils import parse_json_payload, safe_sample, strip_code_fences
 from ..llm import chat
 
 router = APIRouter()
@@ -237,38 +238,22 @@ def _is_generic_title(title: str) -> bool:
     return normalized in _GENERIC_SLIDE_TITLES
 
 
-def _strip_code_fences(raw: str) -> str:
-    return re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+def _strip_code_fences(raw: object | None) -> str:
+    return strip_code_fences(raw)
 
 
-def _parse_presentation_payload(raw: str) -> list[dict] | None:
-    cleaned = _strip_code_fences(raw)
-    if not cleaned:
-        return None
-
-    candidates: list[str] = [cleaned]
-    start = cleaned.find("{")
-    end = cleaned.rfind("}") + 1
-    if start >= 0 and end > start:
-        candidates.append(cleaned[start:end])
-
-    for candidate in candidates:
-        for loader in (json.loads, ast.literal_eval):
-            try:
-                data = loader(candidate)
-            except Exception:
-                continue
-
-            if isinstance(data, dict):
-                slides = data.get("slides")
-                if isinstance(slides, list):
-                    return slides
-            if isinstance(data, list):
-                return data
+def _parse_presentation_payload(raw: object | None) -> list[dict] | None:
+    data = parse_json_payload(raw)
+    if isinstance(data, dict):
+        slides = data.get("slides")
+        if isinstance(slides, list):
+            return slides
+    if isinstance(data, list):
+        return data
     return None
 
 
-def _extract_candidate_bullets(raw: str) -> list[str]:
+def _extract_candidate_bullets(raw: object | None) -> list[str]:
     cleaned = _strip_code_fences(raw)
     if not cleaned:
         return []
@@ -312,7 +297,7 @@ def _fallback_slides_from_text(
     title: str,
     domain: str,
     tags: list[str],
-    raw: str = "",
+    raw: object | None = "",
 ) -> list[dict]:
     bullets = _extract_candidate_bullets(raw)
     if len(bullets) < 6:
@@ -432,7 +417,7 @@ async def _generate_slides(
             "Presentation parse failed: domain=%s style=%s raw_sample=%r",
             resolved_domain,
             style,
-            raw[:500],
+            safe_sample(raw),
         )
         return _fallback_slides_from_text(text, title, resolved_domain, tags, raw=raw), resolved_domain
 

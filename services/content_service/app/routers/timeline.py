@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import ast
-import json
 import logging
 import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..config import settings
+from ..json_utils import parse_json_payload, safe_sample, strip_code_fences
 from ..llm import chat
 
 router = APIRouter()
@@ -40,39 +39,14 @@ _DATE_RE = re.compile(
 )
 
 
-def _strip_code_fences(raw: str) -> str:
-    return re.sub(
-        r"^\s*```(?:json)?\s*|\s*```\s*$",
-        "",
-        raw.strip(),
-        flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-
-
-def _parse_timeline_payload(raw: str) -> list[dict] | None:
-    cleaned = _strip_code_fences(raw)
-    if not cleaned:
-        return None
-
-    candidates: list[str] = [cleaned]
-    start = cleaned.find("{")
-    end = cleaned.rfind("}") + 1
-    if start >= 0 and end > start:
-        candidates.append(cleaned[start:end])
-
-    for candidate in candidates:
-        for loader in (json.loads, ast.literal_eval):
-            try:
-                data = loader(candidate)
-            except Exception:
-                continue
-
-            if isinstance(data, dict):
-                events = data.get("events")
-                if isinstance(events, list):
-                    return events
-            if isinstance(data, list):
-                return data
+def _parse_timeline_payload(raw: object | None) -> list[dict] | None:
+    data = parse_json_payload(raw)
+    if isinstance(data, dict):
+        events = data.get("events")
+        if isinstance(events, list):
+            return events
+    if isinstance(data, list):
+        return data
     return None
 
 
@@ -228,7 +202,7 @@ async def generate_timeline(req: TimelineRequest) -> TimelineResponse:
 
     parsed_events = _parse_timeline_payload(raw)
     if parsed_events is None:
-        logger.warning("Timeline parse failed, using fallback. raw_sample=%r", raw[:500])
+        logger.warning("Timeline parse failed, using fallback. raw_sample=%r", safe_sample(raw))
         return TimelineResponse(events=_fallback_timeline_events(req.text))
 
     normalized_events = [event for item in parsed_events if (event := _normalize_event(item)) is not None]

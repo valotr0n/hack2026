@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..config import settings
-from ..json_utils import candidate_sentences, parse_json_payload
+from ..json_utils import candidate_sentences, parse_json_payload, safe_sample
 from ..llm import chat
 
 router = APIRouter()
@@ -244,7 +244,7 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
     try:
         data = _parse_contract(raw1)
     except Exception as exc:
-        logger.warning("Contract extract parse failed: %s; using fallback; raw=%r", exc, raw1[:1200])
+        logger.warning("Contract extract parse failed: %s; using fallback; raw=%r", exc, safe_sample(raw1, 1200))
         extracted = _fallback_contract(req.text)
         return extracted
 
@@ -286,6 +286,6 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         logger.warning(
             "Contract verify parse/normalization failed: %s; returning extract pass result; raw=%r",
             exc,
-            raw2[:1200],
+            safe_sample(raw2, 1200),
         )
         return extracted

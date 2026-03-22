@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter
 from pydantic import BaseModel
 from ..config import settings
-from ..json_utils import parse_json_payload
+from ..json_utils import parse_json_payload, safe_sample
 from ..llm import chat
 
 router = APIRouter()
@@ -175,7 +175,7 @@ async def generate_questions(req: QuestionsRequest) -> QuestionsResponse:
 
     data = parse_json_payload(raw)
     if not isinstance(data, dict):
-        logger.warning("Questions parse failed, using fallback. raw_sample=%r", raw[:500])
+        logger.warning("Questions parse failed, using fallback. raw_sample=%r", safe_sample(raw))
         return _fallback_questions(req)
 
     try:

@@ -66,6 +66,15 @@ def parse_json_payload(raw: object | None) -> object | None:
     return None
 
 
+def safe_sample(raw: object | None, limit: int = 500) -> str:
+    if raw is None:
+        return "<none>"
+    cleaned = strip_code_fences(raw)
+    if not cleaned:
+        return "<empty>"
+    return cleaned[:limit]
+
+
 def split_sentences(text: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", text or "").strip()
     if not normalized:

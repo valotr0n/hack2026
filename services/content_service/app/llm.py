@@ -69,4 +69,40 @@ async def chat(system: str, user: str, temperature: float = 0.7, max_tokens: int
     response = await client.chat.completions.create(
         **request_kwargs,
     )
-    return response.choices[0].message.content
+    if not response.choices:
+        raise RuntimeError(f"LLM returned no choices for model={model} contour={contour}")
+
+    message = response.choices[0].message
+    content = message.content
+
+    if isinstance(content, str):
+        normalized = content.strip()
+        if normalized:
+            return normalized
+        raise RuntimeError(
+            f"LLM returned empty text content for model={model} contour={contour}"
+        )
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item.strip():
+                    parts.append(item.strip())
+                continue
+            text = getattr(item, "text", None)
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+                continue
+            if isinstance(item, dict):
+                maybe_text = item.get("text")
+                if isinstance(maybe_text, str) and maybe_text.strip():
+                    parts.append(maybe_text.strip())
+        joined = "\n".join(part for part in parts if part)
+        if joined:
+            return joined
+
+    finish_reason = getattr(response.choices[0], "finish_reason", None)
+    raise RuntimeError(
+        f"LLM returned non-text content for model={model} contour={contour} finish_reason={finish_reason}"
+    )

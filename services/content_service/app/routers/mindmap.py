@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter
 from pydantic import BaseModel
-from ..json_utils import candidate_sentences, parse_json_payload, top_keywords
+from ..json_utils import candidate_sentences, parse_json_payload, safe_sample, top_keywords
 from ..llm import chat
 
 router = APIRouter()
@@ -71,7 +71,7 @@ async def generate_mindmap(req: MindmapRequest) -> MindmapResponse:
 
     data = parse_json_payload(raw)
     if not isinstance(data, dict):
-        logger.warning("Mindmap parse failed, using fallback. raw_sample=%r", raw[:500])
+        logger.warning("Mindmap parse failed, using fallback. raw_sample=%r", safe_sample(raw))
         return _fallback_mindmap(req.text)
 
     try:

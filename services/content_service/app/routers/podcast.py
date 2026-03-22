@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pydub import AudioSegment
 from ..llm import chat
 from ..config import settings
-from ..json_utils import candidate_sentences, parse_json_payload
+from ..json_utils import candidate_sentences, parse_json_payload, safe_sample
 from ..tts import SPEAKER_ALEX, SPEAKER_MARIA, synthesize
 
 router = APIRouter()
@@ -119,7 +119,7 @@ async def generate_podcast(req: PodcastRequest) -> PodcastResponse:
     else:
         data = parse_json_payload(raw)
         if data is None:
-            logger.warning("Podcast parse failed, using fallback. raw_sample=%r", raw[:500])
+            logger.warning("Podcast parse failed, using fallback. raw_sample=%r", safe_sample(raw))
             script = _fallback_script(req.text, req.tone)
         else:
             script = _normalize_script(data, req.text, req.tone)
