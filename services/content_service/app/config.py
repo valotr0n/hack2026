@@ -5,6 +5,7 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "https://hackai.centrinvest.ru:6630/v1")
     llm_api_key: str = os.getenv("LLM_API_KEY", "hackaton2026")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-oss-20b")
+    llm_proxy: str | None = os.getenv("LLM_PROXY")  # например http://user:pass@host:port
 
     stt_base_url: str = os.getenv("STT_BASE_URL", "https://hackai.centrinvest.ru:6640/v1")
     stt_api_key: str = os.getenv("STT_API_KEY", "hackaton2026")

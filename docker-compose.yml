@@ -1,4 +1,11 @@
 services:
+  ss-proxy:
+    image: shadowsocks/shadowsocks-libev
+    command: ss-local -s 194.34.236.241 -p 59995 -l 1080 -k tRf3j5T0HvZgwp2LBZxxXx -m chacha20-ietf-poly1305 -b 0.0.0.0
+    networks:
+      - ai-platform
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     environment:
@@ -77,6 +84,7 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_API_KEY: ${LLM_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
+      LLM_PROXY: ${LLM_PROXY:-socks5://ss-proxy:1080}
       STT_BASE_URL: ${STT_BASE_URL}
       STT_API_KEY: ${STT_API_KEY}
       STT_MODE: ${STT_MODE:-auto}
@@ -119,6 +127,8 @@ services:
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
       DB_PATH: /app/data/platform.db
     depends_on:
+      ss-proxy:
+        condition: service_started
       rag_service:
         condition: service_healthy
       content_service:

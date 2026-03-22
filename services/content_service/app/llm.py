@@ -23,7 +23,11 @@ _open_client = AsyncOpenAI(
     base_url=settings.llm_base_url,
     api_key=settings.llm_api_key,
     max_retries=0,  # Без ретраев: 3 попытки × 120s = 360s на один чанк
-    http_client=httpx.AsyncClient(verify=False, timeout=300.0),
+    http_client=httpx.AsyncClient(
+        verify=False,
+        timeout=300.0,
+        proxy=settings.llm_proxy,  # None = без прокси
+    ),
 )
 
 # Закрытый контур — локальный ollama
