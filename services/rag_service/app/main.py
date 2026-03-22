@@ -59,11 +59,12 @@ def _configure_cpu_runtime() -> None:
 async def lifespan(app: FastAPI):
     _configure_cpu_runtime()
     embedding_model = SentenceTransformer(settings.embedder_model)
-    llm_http_client = httpx.AsyncClient(verify=False, timeout=120.0)
+    llm_http_client = httpx.AsyncClient(verify=False, timeout=120.0, proxy=settings.llm_proxy)
     llm_client = AsyncOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         http_client=llm_http_client,
+        max_retries=0,
     )
 
     app.state.embedding_model = embedding_model
