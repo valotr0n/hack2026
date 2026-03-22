@@ -121,6 +121,16 @@ def _contour_headers(notebook: dict) -> dict[str, str]:
     return {"x-contour": notebook.get("contour", "open")}
 
 
+def _http_error_detail(exc: httpx.HTTPStatusError) -> Any:
+    try:
+        payload = exc.response.json()
+        if isinstance(payload, dict) and "detail" in payload:
+            return payload["detail"]
+    except Exception:
+        pass
+    return exc.response.text
+
+
 async def _owned_notebook(notebook_id: str, user_id: str) -> dict[str, Any]:
     notebook = await get_notebook(settings.db_path, notebook_id)
     if not notebook:
@@ -141,7 +151,7 @@ async def _notebook_text(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     text: str = resp.json().get("text", "")
     if not text.strip():
@@ -500,7 +510,7 @@ async def upload_source(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     rag_data = rag_resp.json()
     source = await create_source(
@@ -566,7 +576,7 @@ async def transcribe_source(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     text = transcribe_resp.json().get("text", "")
     stem = Path(file.filename or "transcription").stem
@@ -584,7 +594,7 @@ async def transcribe_source(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     rag_data = rag_resp.json()
     source = await create_source(
@@ -739,7 +749,7 @@ async def upload_source_url(
         except httpx.RequestError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+            raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
         rag_data = rag_resp.json()
         source = await create_source(
             settings.db_path,
@@ -780,7 +790,7 @@ async def upload_source_url(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     rag_data = rag_resp.json()
     source = await create_source(
@@ -973,6 +983,8 @@ async def summary(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "summary", data.get("summary", ""))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1027,6 +1039,8 @@ async def mindmap(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "mindmap", _json.dumps(data, ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1074,6 +1088,8 @@ async def flashcards(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "flashcards", _json.dumps(data.get("flashcards", []), ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1126,6 +1142,8 @@ async def podcast(
         await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
         await save_notebook_content(settings.db_path, notebook_id, "podcast_script", _json.dumps(data.get("script", []), ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1179,7 +1197,7 @@ async def contract(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
 
 @router.post(
@@ -1226,6 +1244,8 @@ async def knowledge_graph(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "knowledge_graph", _json.dumps(data, ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1277,6 +1297,8 @@ async def check_flashcard(
         )
         resp.raise_for_status()
         return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1341,6 +1363,8 @@ async def multi_search(
         resp.raise_for_status()
         data = resp.json()
         return {"answer": data.get("answer", ""), "notebooks_searched": titles}
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1390,6 +1414,8 @@ async def timeline(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "timeline", _json.dumps(data, ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1451,6 +1477,8 @@ async def generate_questions(
         data = resp.json()
         await save_notebook_content(settings.db_path, notebook_id, "questions", _json.dumps(data, ensure_ascii=False))
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1519,6 +1547,8 @@ async def compare_notebooks(
         data["label_a"] = nb_a["title"]
         data["label_b"] = nb_b["title"]
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1585,7 +1615,7 @@ async def compare_sources(
         except httpx.RequestError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+            raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     import asyncio as _asyncio
     text_a, text_b = await _asyncio.gather(_source_text(req.source_ids[0]), _source_text(req.source_ids[1]))
@@ -1610,6 +1640,8 @@ async def compare_sources(
         data["label_a"] = src_a["filename"]
         data["label_b"] = src_b["filename"]
         return data
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1692,11 +1724,7 @@ async def presentation_preview(
         )
         return data
     except httpx.HTTPStatusError as exc:
-        try:
-            detail = exc.response.json().get("detail", exc.response.text)
-        except Exception:
-            detail = exc.response.text
-        raise HTTPException(status_code=exc.response.status_code, detail=detail)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1765,11 +1793,7 @@ async def presentation_download(
         except httpx.RequestError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         except httpx.HTTPStatusError as exc:
-            try:
-                detail = exc.response.json().get("detail", exc.response.text)
-            except Exception:
-                detail = exc.response.text
-            raise HTTPException(status_code=exc.response.status_code, detail=detail)
+            raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     else:
         cached = notebook.get("presentation")
         if isinstance(cached, dict):
@@ -1791,11 +1815,7 @@ async def presentation_download(
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        try:
-            detail = exc.response.json().get("detail", exc.response.text)
-        except Exception:
-            detail = exc.response.text
-        raise HTTPException(status_code=exc.response.status_code, detail=detail)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -1838,7 +1858,7 @@ async def autotag_notebook(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
 
     if not text.strip():
         raise HTTPException(
@@ -1854,5 +1874,7 @@ async def autotag_notebook(
         )
         resp.raise_for_status()
         return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=_http_error_detail(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))

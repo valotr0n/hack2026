@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import ast
 import json
+import logging
+import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..config import settings
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class TimelineRequest(BaseModel):
@@ -22,6 +26,141 @@ class TimelineEvent(BaseModel):
 
 class TimelineResponse(BaseModel):
     events: list[TimelineEvent]
+
+
+_MONTHS = (
+    "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
+)
+_DATE_RE = re.compile(
+    rf"\b(?:\d{{1,2}}[./]\d{{1,2}}[./]\d{{2,4}}|"
+    rf"\d{{1,2}}\s+(?:{_MONTHS})\s+\d{{4}}|"
+    rf"Q[1-4]\s+\d{{4}}|"
+    rf"(?:через|за|спустя|после|до|в течение|на следующий день|в тот же день|ровно через)[^.!?\n]{{0,48}})\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _strip_code_fences(raw: str) -> str:
+    return re.sub(
+        r"^\s*```(?:json)?\s*|\s*```\s*$",
+        "",
+        raw.strip(),
+        flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
+
+
+def _parse_timeline_payload(raw: str) -> list[dict] | None:
+    cleaned = _strip_code_fences(raw)
+    if not cleaned:
+        return None
+
+    candidates: list[str] = [cleaned]
+    start = cleaned.find("{")
+    end = cleaned.rfind("}") + 1
+    if start >= 0 and end > start:
+        candidates.append(cleaned[start:end])
+
+    for candidate in candidates:
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                data = loader(candidate)
+            except Exception:
+                continue
+
+            if isinstance(data, dict):
+                events = data.get("events")
+                if isinstance(events, list):
+                    return events
+            if isinstance(data, list):
+                return data
+    return None
+
+
+def _guess_event_type(text: str) -> str:
+    normalized = text.lower()
+    if any(token in normalized for token in ("платеж", "оплат", "взнос", "погашен", "перечисл")):
+        return "payment"
+    if any(token in normalized for token in ("срок", "дедлайн", "не позднее", "до ", "в течение")):
+        return "deadline"
+    if any(token in normalized for token in ("договор", "соглашен", "подписан", "контракт")):
+        return "agreement"
+    if any(token in normalized for token in ("наруш", "просроч", "штраф", "неустой", "дефолт")):
+        return "violation"
+    if any(token in normalized for token in ("встрет", "обнаруж", "получ", "переех", "увид", "произош")):
+        return "event"
+    return "other"
+
+
+def _build_title(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text).strip(" .")
+    if not normalized:
+        return "Событие"
+    words = normalized.split()
+    short = " ".join(words[:8]).strip(" ,.")
+    return short[:96] or "Событие"
+
+
+def _normalize_event(event: dict) -> TimelineEvent | None:
+    if not isinstance(event, dict):
+        return None
+
+    date = str(event.get("date") or "").strip()
+    title = str(event.get("title") or "").strip()
+    description = str(event.get("description") or "").strip()
+    event_type = str(event.get("type") or "").strip().lower()
+
+    if not date:
+        source_text = " ".join(part for part in (title, description) if part)
+        match = _DATE_RE.search(source_text)
+        date = match.group(0).strip(" .,:;") if match else ""
+    if not description:
+        description = title
+    if not title:
+        title = _build_title(description)
+    if event_type not in {"payment", "deadline", "event", "agreement", "violation", "other"}:
+        event_type = _guess_event_type(f"{title} {description}")
+
+    if not date or not description:
+        return None
+
+    return TimelineEvent(
+        date=date[:80],
+        title=title[:120],
+        description=description[:400],
+        type=event_type,
+    )
+
+
+def _fallback_timeline_events(text: str) -> list[TimelineEvent]:
+    sentences = [
+        chunk.strip()
+        for chunk in re.split(r"(?<=[.!?])\s+|\n+", text)
+        if chunk.strip()
+    ]
+    events: list[TimelineEvent] = []
+    seen: set[tuple[str, str]] = set()
+
+    for sentence in sentences:
+        match = _DATE_RE.search(sentence)
+        if not match:
+            continue
+        date = match.group(0).strip(" .,:;")
+        description = re.sub(r"\s+", " ", sentence).strip()
+        event = TimelineEvent(
+            date=date[:80],
+            title=_build_title(re.sub(_DATE_RE, "", description, count=1).strip(" ,.-") or description),
+            description=description[:400],
+            type=_guess_event_type(description),
+        )
+        key = (event.date.lower(), event.description.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(event)
+        if len(events) >= 20:
+            break
+
+    return events
 
 
 @router.post(
@@ -76,19 +215,25 @@ async def generate_timeline(req: TimelineRequest) -> TimelineResponse:
         f"Текст:\n{req.text}"
     )
 
-    raw = await chat(
-        system=system,
-        user=user,
-        temperature=0.1,
-        max_tokens=settings.timeline_max_tokens,
-    )
-
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
-        return TimelineResponse(
-            events=[TimelineEvent(**e) for e in data.get("events", [])]
+        raw = await chat(
+            system=system,
+            user=user,
+            temperature=0.1,
+            max_tokens=settings.timeline_max_tokens,
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
+    except Exception as exc:
+        logger.warning("Timeline generation failed before parsing: %s", exc)
+        return TimelineResponse(events=_fallback_timeline_events(req.text))
+
+    parsed_events = _parse_timeline_payload(raw)
+    if parsed_events is None:
+        logger.warning("Timeline parse failed, using fallback. raw_sample=%r", raw[:500])
+        return TimelineResponse(events=_fallback_timeline_events(req.text))
+
+    normalized_events = [event for item in parsed_events if (event := _normalize_event(item)) is not None]
+    if normalized_events:
+        return TimelineResponse(events=normalized_events)
+
+    logger.warning("Timeline normalization produced no valid events, using fallback.")
+    return TimelineResponse(events=_fallback_timeline_events(req.text))

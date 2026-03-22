@@ -1,9 +1,11 @@
-import json
-from fastapi import APIRouter, HTTPException
+import logging
+from fastapi import APIRouter
 from pydantic import BaseModel
+from ..json_utils import candidate_sentences, parse_json_payload, top_keywords
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class MindmapNode(BaseModel):
@@ -21,6 +23,18 @@ class MindmapRequest(BaseModel):
 class MindmapResponse(BaseModel):
     title: str
     children: list[MindmapNode] = []
+
+
+def _fallback_mindmap(text: str) -> MindmapResponse:
+    keywords = top_keywords(text, limit=4)
+    sentences = candidate_sentences(text, min_length=20, max_items=8)
+    children: list[MindmapNode] = []
+    for index, keyword in enumerate(keywords or ["Ключевая тема", "Детали", "Выводы"]):
+        branch_sentences = sentences[index * 2:(index + 1) * 2]
+        branch_children = [MindmapNode(title=sentence[:60], children=[]) for sentence in branch_sentences]
+        children.append(MindmapNode(title=keyword[:40].capitalize(), children=branch_children))
+    title = (keywords[0].capitalize() if keywords else "Структура документа")
+    return MindmapResponse(title=title, children=children[:4])
 
 
 @router.post("/mindmap", response_model=MindmapResponse)
@@ -49,12 +63,19 @@ async def generate_mindmap(req: MindmapRequest) -> MindmapResponse:
         f"Текст:\n{req.text}"
     )
 
-    raw = await chat(system=system, user=user, temperature=0.3)
+    try:
+        raw = await chat(system=system, user=user, temperature=0.3)
+    except Exception as exc:
+        logger.warning("Mindmap generation failed before parsing: %s", exc)
+        return _fallback_mindmap(req.text)
+
+    data = parse_json_payload(raw)
+    if not isinstance(data, dict):
+        logger.warning("Mindmap parse failed, using fallback. raw_sample=%r", raw[:500])
+        return _fallback_mindmap(req.text)
 
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
         return MindmapResponse(title=data["title"], children=data.get("children", []))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
+    except Exception as exc:
+        logger.warning("Mindmap normalization failed, using fallback: %s; data=%r", exc, data)
+        return _fallback_mindmap(req.text)

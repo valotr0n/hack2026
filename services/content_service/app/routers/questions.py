@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import json
-from fastapi import APIRouter, HTTPException
+import logging
+import re
+from fastapi import APIRouter
 from pydantic import BaseModel
 from ..config import settings
+from ..json_utils import parse_json_payload
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class QuestionsRequest(BaseModel):
@@ -31,6 +34,67 @@ _CONTEXT_PROMPTS = {
     "financial": "финансового аналитика, изучающего отчётность компании",
     "general": "эксперта-аналитика, изучающего документ",
 }
+
+
+def _fallback_questions(req: QuestionsRequest) -> QuestionsResponse:
+    text = req.text.lower()
+    questions: list[Question] = []
+
+    checks = [
+        (
+            not re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|срок|дата|до |в течение|не позднее", text),
+            "Какие конкретные сроки, даты и дедлайны предусмотрены документом?",
+            "missing_info",
+            "high",
+        ),
+        (
+            not any(token in text for token in ("ооо", "ип", "ао", "пао", "банк", "сторона", "заемщик", "кредитор")),
+            "Кто является сторонами документа и кто несёт ключевые обязательства?",
+            "missing_info",
+            "high",
+        ),
+        (
+            not any(token in text for token in ("штраф", "пен", "неустой", "ответствен")),
+            "Какая ответственность и какие санкции предусмотрены за нарушение условий?",
+            "risk",
+            "medium",
+        ),
+        (
+            not any(token in text for token in ("сумм", "руб", "процент", "ставк", "платеж", "цена")),
+            "Какие суммы, ставки, цены или платежи должны быть подтверждены дополнительно?",
+            "missing_info",
+            "high",
+        ),
+        (
+            not any(token in text for token in ("приложен", "документ", "акт", "отчет", "справк", "выписк")),
+            "Какие дополнительные документы или приложения нужно запросить для проверки условий?",
+            "required_doc",
+            "medium",
+        ),
+    ]
+
+    for should_add, question, category, priority in checks:
+        if should_add:
+            questions.append(Question(question=question, category=category, priority=priority))
+
+    if not questions:
+        questions = [
+            Question(
+                question="Какие формулировки документа остаются двусмысленными и требуют письменного уточнения?",
+                category="clarification",
+                priority="medium",
+            ),
+            Question(
+                question="Какие риски или обязательства сторон нужно подтвердить дополнительными материалами?",
+                category="risk",
+                priority="medium",
+            ),
+        ]
+
+    return QuestionsResponse(
+        questions=questions[:8],
+        summary="Автоматический fallback выявил области, по которым в документе недостаточно явной информации для уверенного решения.",
+    )
 
 
 @router.post(
@@ -98,20 +162,27 @@ async def generate_questions(req: QuestionsRequest) -> QuestionsResponse:
         f"Документ:\n{req.text}"
     )
 
-    raw = await chat(
-        system=system,
-        user=user,
-        temperature=0.3,
-        max_tokens=settings.questions_max_tokens,
-    )
+    try:
+        raw = await chat(
+            system=system,
+            user=user,
+            temperature=0.3,
+            max_tokens=settings.questions_max_tokens,
+        )
+    except Exception as exc:
+        logger.warning("Questions generation failed before parsing: %s", exc)
+        return _fallback_questions(req)
+
+    data = parse_json_payload(raw)
+    if not isinstance(data, dict):
+        logger.warning("Questions parse failed, using fallback. raw_sample=%r", raw[:500])
+        return _fallback_questions(req)
 
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
         return QuestionsResponse(
             questions=[Question(**q) for q in data.get("questions", [])],
             summary=data.get("summary", ""),
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
+    except Exception as exc:
+        logger.warning("Questions normalization failed, using fallback: %s; data=%r", exc, data)
+        return _fallback_questions(req)

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..config import settings
+from ..json_utils import candidate_sentences, parse_json_payload
 from ..llm import chat
 
 router = APIRouter()
@@ -48,14 +50,10 @@ _VERIFY_SYSTEM = (
 
 
 def _parse_contract(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:].strip()
-    start = raw.find("{")
-    end = raw.rfind("}") + 1
-    return json.loads(raw[start:end])
+    data = parse_json_payload(raw)
+    if not isinstance(data, dict):
+        raise ValueError("contract payload is not a JSON object")
+    return data
 
 
 def _stringify(value: object) -> str:
@@ -128,6 +126,71 @@ def _normalize_contract_payload(data: dict) -> ContractResponse:
     )
 
 
+def _fallback_contract(text: str) -> ContractResponse:
+    sentences = candidate_sentences(text, min_length=20, max_items=20)
+    lowered = text.lower()
+
+    parties = re.findall(r"(ООО\s+[^,.\n]+|ИП\s+[^,.\n]+|ПАО\s+[^,.\n]+|АО\s+[^,.\n]+|Банк\s+[^,.\n]+)", text)
+    unique_parties: list[str] = []
+    seen: set[str] = set()
+    for party in parties:
+        normalized = party.strip()
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_parties.append(normalized[:160])
+        if len(unique_parties) >= 4:
+            break
+
+    subject = ""
+    for sentence in sentences:
+        if any(token in sentence.lower() for token in ("предмет", "договор", "соглашение", "кредит", "поставка", "оказание услуг")):
+            subject = sentence[:240]
+            break
+    if not subject and sentences:
+        subject = sentences[0][:240]
+
+    key_conditions = [
+        sentence[:220]
+        for sentence in sentences
+        if any(token in sentence.lower() for token in ("сумм", "ставк", "процент", "оплат", "платеж", "порядок", "услов"))
+    ][:5]
+    deadlines = [
+        sentence[:220]
+        for sentence in sentences
+        if any(token in sentence.lower() for token in ("срок", "дата", "до ", "в течение", "не позднее", "через"))
+    ][:5]
+    penalties = [
+        sentence[:220]
+        for sentence in sentences
+        if any(token in sentence.lower() for token in ("штраф", "пен", "неустой", "санкц"))
+    ][:5]
+    risks = penalties[:3]
+    if not risks and any(token in lowered for token in ("наруш", "ответствен", "риск", "просроч")):
+        risks = [
+            sentence[:220]
+            for sentence in sentences
+            if any(token in sentence.lower() for token in ("наруш", "ответствен", "риск", "просроч"))
+        ][:3]
+
+    obligations = [
+        Obligation(party="Не указано", text=sentence[:220])
+        for sentence in sentences
+        if any(token in sentence.lower() for token in ("обязан", "должен", "обязуется", "передает", "оплачивает", "предоставляет"))
+    ][:5]
+
+    return ContractResponse(
+        parties=unique_parties,
+        subject=subject,
+        key_conditions=key_conditions,
+        obligations=obligations,
+        risks=risks,
+        deadlines=deadlines,
+        penalties=penalties,
+    )
+
+
 @router.post(
     "/contract",
     response_model=ContractResponse,
@@ -181,14 +244,16 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
     try:
         data = _parse_contract(raw1)
     except Exception as exc:
-        logger.warning("Contract extract parse failed: %s; raw=%r", exc, raw1[:1200])
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 1)")
+        logger.warning("Contract extract parse failed: %s; using fallback; raw=%r", exc, raw1[:1200])
+        extracted = _fallback_contract(req.text)
+        return extracted
 
     try:
         extracted = _normalize_contract_payload(data)
     except Exception as exc:
-        logger.warning("Contract extract normalization failed: %s; data=%r", exc, data)
-        raise HTTPException(status_code=500, detail="Не удалось нормализовать ответ модели (проход 1)")
+        logger.warning("Contract extract normalization failed: %s; using fallback; data=%r", exc, data)
+        extracted = _fallback_contract(req.text)
+        return extracted
 
     # Проход 2: верификация
     verify_user = (
@@ -200,12 +265,19 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         "Удали из каждого поля всё, что явно не подтверждается текстом выше. "
         f"Верни исправленный JSON в том же формате:\n{fmt}"
     )
-    raw2 = await chat(
-        system=_VERIFY_SYSTEM,
-        user=verify_user,
-        temperature=0.1,
-        max_tokens=settings.contract_verify_max_tokens,
-    )
+    try:
+        raw2 = await chat(
+            system=_VERIFY_SYSTEM,
+            user=verify_user,
+            temperature=0.1,
+            max_tokens=settings.contract_verify_max_tokens,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Contract verify generation failed: %s; returning extract pass result",
+            exc,
+        )
+        return extracted
 
     try:
         verified = _parse_contract(raw2)

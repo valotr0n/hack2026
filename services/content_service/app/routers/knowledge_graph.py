@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
-from fastapi import APIRouter, HTTPException
+import logging
+from fastapi import APIRouter
 from pydantic import BaseModel
+from ..json_utils import parse_json_payload, top_keywords
 from ..llm import chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeGraphRequest(BaseModel):
@@ -27,6 +29,19 @@ class KGEdge(BaseModel):
 class KnowledgeGraphResponse(BaseModel):
     nodes: list[KGNode]
     edges: list[KGEdge]
+
+
+def _fallback_knowledge_graph(text: str) -> KnowledgeGraphResponse:
+    keywords = top_keywords(text, limit=8)
+    nodes = [
+        KGNode(id=f"node_{index + 1}", label=keyword[:60], type="concept")
+        for index, keyword in enumerate(keywords)
+    ]
+    edges = [
+        KGEdge(source=nodes[index].id, target=nodes[index + 1].id, label="связано с")
+        for index in range(max(0, len(nodes) - 1))
+    ]
+    return KnowledgeGraphResponse(nodes=nodes, edges=edges)
 
 
 @router.post(
@@ -74,15 +89,22 @@ async def generate_knowledge_graph(req: KnowledgeGraphRequest) -> KnowledgeGraph
         f"Текст:\n{req.text}"
     )
 
-    raw = await chat(system=system, user=user, temperature=0.3)
+    try:
+        raw = await chat(system=system, user=user, temperature=0.3)
+    except Exception as exc:
+        logger.warning("Knowledge graph generation failed before parsing: %s", exc)
+        return _fallback_knowledge_graph(req.text)
+
+    data = parse_json_payload(raw)
+    if not isinstance(data, dict):
+        logger.warning("Knowledge graph parse failed, using fallback. raw_sample=%r", raw[:500])
+        return _fallback_knowledge_graph(req.text)
 
     try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        data = json.loads(raw[start:end])
         return KnowledgeGraphResponse(
             nodes=[KGNode(**n) for n in data.get("nodes", [])],
             edges=[KGEdge(**e) for e in data.get("edges", [])],
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели")
+    except Exception as exc:
+        logger.warning("Knowledge graph normalization failed, using fallback: %s; data=%r", exc, data)
+        return _fallback_knowledge_graph(req.text)
