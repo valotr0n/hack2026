@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -48,6 +48,31 @@ _UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{12}"
 )
+
+import logging as _logging
+
+_logger = _logging.getLogger("gateway.notebooks")
+
+
+async def _run_autotag(client: httpx.AsyncClient, source_id: str, preview: str, contour: str) -> None:
+    """Фоновая задача: запускает autotag и сохраняет результат в БД."""
+    try:
+        tag_resp = await client.post(
+            _content("/autotag"),
+            json={"text": preview},
+            headers={"x-contour": contour},
+        )
+        tag_resp.raise_for_status()
+        tag_data = tag_resp.json()
+        await update_source_autotag(
+            settings.db_path,
+            source_id,
+            tag_data.get("doc_type", "прочее"),
+            tag_data.get("tags", []),
+        )
+    except Exception as exc:
+        _logger.warning("Background autotag failed for source_id=%s: %s", source_id, exc)
+
 
 def _parse_notebook(nb: dict) -> dict:
     """Десериализует JSON-колонки из SQLite в Python-объекты."""
@@ -394,6 +419,7 @@ async def delete(
 async def upload_source(
     notebook_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
@@ -425,21 +451,7 @@ async def upload_source(
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = rag_data.get("preview", "")
     if preview.strip():
-        try:
-            tag_resp = await client.post(
-                _content("/autotag"),
-                json={"text": preview},
-                headers={"x-contour": notebook.get("contour", "open")},
-            )
-            tag_resp.raise_for_status()
-            tag_data = tag_resp.json()
-            doc_type = tag_data.get("doc_type", "прочее")
-            tags = tag_data.get("tags", [])
-            await update_source_autotag(settings.db_path, source["id"], doc_type, tags)
-            source["doc_type"] = doc_type
-            source["tags"] = tags
-        except Exception:
-            pass  # best-effort, не роняем upload
+        background_tasks.add_task(_run_autotag, client, source["id"], preview, notebook.get("contour", "open"))
     return source
 
 
@@ -460,6 +472,7 @@ async def upload_source(
 async def transcribe_source(
     notebook_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
@@ -507,21 +520,7 @@ async def transcribe_source(
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = text[:500]
     if preview.strip():
-        try:
-            tag_resp = await client.post(
-                _content("/autotag"),
-                json={"text": preview},
-                headers={"x-contour": notebook.get("contour", "open")},
-            )
-            tag_resp.raise_for_status()
-            tag_data = tag_resp.json()
-            doc_type = tag_data.get("doc_type", "прочее")
-            tags = tag_data.get("tags", [])
-            await update_source_autotag(settings.db_path, source["id"], doc_type, tags)
-            source["doc_type"] = doc_type
-            source["tags"] = tags
-        except Exception:
-            pass
+        background_tasks.add_task(_run_autotag, client, source["id"], preview, notebook.get("contour", "open"))
     return source
 
 
@@ -614,6 +613,7 @@ async def upload_source_url(
     notebook_id: str,
     req: UrlSourceRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(require_auth),
 ) -> dict[str, Any]:
     import asyncio
@@ -653,15 +653,7 @@ async def upload_source_url(
         await clear_notebook_cache(settings.db_path, notebook_id)
         preview = rag_data.get("preview", "")
         if preview.strip():
-            try:
-                tag_resp = await client.post(_content("/autotag"), json={"text": preview}, headers={"x-contour": notebook.get("contour", "open")})
-                tag_resp.raise_for_status()
-                tag_data = tag_resp.json()
-                await update_source_autotag(settings.db_path, source["id"], tag_data.get("doc_type", "прочее"), tag_data.get("tags", []))
-                source["doc_type"] = tag_data.get("doc_type")
-                source["tags"] = tag_data.get("tags", [])
-            except Exception:
-                pass
+            background_tasks.add_task(_run_autotag, client, source["id"], preview, notebook.get("contour", "open"))
         return source
     else:
         try:
@@ -687,15 +679,7 @@ async def upload_source_url(
     await clear_notebook_cache(settings.db_path, notebook_id)
     preview = text[:500]
     if preview.strip():
-        try:
-            tag_resp = await client.post(_content("/autotag"), json={"text": preview}, headers={"x-contour": notebook.get("contour", "open")})
-            tag_resp.raise_for_status()
-            tag_data = tag_resp.json()
-            await update_source_autotag(settings.db_path, source["id"], tag_data.get("doc_type", "прочее"), tag_data.get("tags", []))
-            source["doc_type"] = tag_data.get("doc_type")
-            source["tags"] = tag_data.get("tags", [])
-        except Exception:
-            pass
+        background_tasks.add_task(_run_autotag, client, source["id"], preview, notebook.get("contour", "open"))
     return source
 
 
