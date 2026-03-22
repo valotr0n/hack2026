@@ -10,6 +10,20 @@ SPEAKER_ALEX = "aidar"   # мужской
 SPEAKER_MARIA = "xenia"  # женский
 SAMPLE_RATE = 24000
 
+# Все доступные голоса для фронта
+AVAILABLE_VOICES: list[dict] = [
+    {"id": "aidar",   "name": "Айдар",   "gender": "male"},
+    {"id": "baya",    "name": "Бая",     "gender": "female"},
+    {"id": "kseniya", "name": "Ксения",  "gender": "female"},
+    {"id": "xenia",   "name": "Ксения 2","gender": "female"},
+    {"id": "eugene",  "name": "Евгений", "gender": "male"},
+]
+
+DEFAULT_SPEAKERS = [
+    {"name": "Алекс",  "voice": SPEAKER_ALEX},
+    {"name": "Мария", "voice": SPEAKER_MARIA},
+]
+
 _model = None
 _lock = asyncio.Lock()
 

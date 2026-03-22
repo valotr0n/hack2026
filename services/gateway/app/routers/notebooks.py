@@ -283,8 +283,14 @@ class FlashcardsRequest(BaseModel):
     count: int = Field(default=10, ge=1, le=50)
 
 
+class PodcastSpeaker(BaseModel):
+    name: str
+    voice: str
+
+
 class PodcastRequest(BaseModel):
     tone: str = "popular"  # scientific | popular
+    speakers: list[PodcastSpeaker] = []
 
 
 class QuizCheckRequest(BaseModel):
@@ -1005,7 +1011,10 @@ async def podcast(
         top_k=30)
 
     try:
-        resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(notebook))
+        podcast_payload: dict = {"text": text, "tone": req.tone}
+        if req.speakers:
+            podcast_payload["speakers"] = [s.model_dump() for s in req.speakers]
+        resp = await client.post(_content("/podcast"), json=podcast_payload, headers=_contour_headers(notebook))
         resp.raise_for_status()
         data = resp.json()
         # Переписываем URL чтобы аудио шло через gateway, а не напрямую на content_service:8002
@@ -1014,6 +1023,23 @@ async def podcast(
         await save_notebook_content(settings.db_path, notebook_id, "podcast_url", data.get("audio_url", ""))
         await save_notebook_content(settings.db_path, notebook_id, "podcast_script", _json.dumps(data.get("script", []), ensure_ascii=False))
         return data
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.get(
+    "/voices",
+    summary="Список доступных голосов TTS для подкаста",
+)
+async def list_voices(
+    request: Request,
+    user_id: str = Depends(require_auth),
+) -> list[dict]:
+    client: httpx.AsyncClient = request.app.state.http_client
+    try:
+        resp = await client.get(_content("/voices"))
+        resp.raise_for_status()
+        return resp.json()
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
