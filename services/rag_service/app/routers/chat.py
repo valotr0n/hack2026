@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer
 
-from ..dependencies import get_embedding_model, get_llm_client
+from ..dependencies import get_embedding_model, get_llm_client, get_llm_model
 from ..rag import (
     build_chat_messages,
     build_system_prompt,
@@ -26,6 +26,7 @@ async def chat(
     payload: ChatRequest,
     embedding_model: SentenceTransformer = Depends(get_embedding_model),
     llm_client: AsyncOpenAI = Depends(get_llm_client),
+    llm_model: str = Depends(get_llm_model),
 ) -> StreamingResponse:
     if not payload.query.strip():
         raise HTTPException(
@@ -54,7 +55,7 @@ async def chat(
     system_prompt, sources = build_system_prompt(chunks)
     messages = build_chat_messages(system_prompt, payload.history, payload.query)
     logger.info("LLM stream starting doc_id=%s context_chars=%d", payload.doc_id, len(system_prompt))
-    stream = await create_llm_stream(llm_client, messages)
+    stream = await create_llm_stream(llm_client, messages, model=llm_model)
 
     return StreamingResponse(
         stream_chat_response(stream, sources),

@@ -620,10 +620,11 @@ def build_chat_messages(
 async def create_llm_stream(
     llm_client: AsyncOpenAI,
     messages: list[dict[str, str]],
+    model: str | None = None,
 ):
     try:
         return await llm_client.chat.completions.create(
-            model=settings.llm_model,
+            model=model or settings.llm_model,
             messages=messages,
             stream=True,
         )
