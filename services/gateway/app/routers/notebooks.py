@@ -35,6 +35,9 @@ router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 
 # Максимальный объём текста для передачи в LLM (~20k символов ≈ 5k токенов)
 _MAX_TEXT_LENGTH = 20_000
+# Расширенный лимит для задач извлечения (timeline, contract, knowledge-graph, questions)
+# — нужно видеть все источники блокнота (~60k символов ≈ 15k токенов)
+_MAX_TEXT_LENGTH_EXTENDED = 60_000
 
 import json as _json
 
@@ -1057,7 +1060,7 @@ async def contract(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
     try:
         resp = await client.post(_content("/contract"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1105,7 +1108,7 @@ async def knowledge_graph(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
     try:
         resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1269,7 +1272,7 @@ async def timeline(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
     try:
         resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1330,7 +1333,7 @@ async def generate_questions(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
     try:
         resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook), timeout=300.0)
