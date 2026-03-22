@@ -958,7 +958,7 @@ async def flashcards(
         except Exception:
             pass
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_text(client, notebook_id, max_length=_MAX_TEXT_LENGTH_EXTENDED)
 
     try:
         resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(notebook))
