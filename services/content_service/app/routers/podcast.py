@@ -40,6 +40,23 @@ async def list_voices() -> list[dict]:
     return AVAILABLE_VOICES
 
 
+@router.get("/voices/{voice_id}/sample", summary="Аудиосэмпл голоса")
+async def voice_sample(voice_id: str):
+    valid_ids = {v["id"] for v in AVAILABLE_VOICES}
+    if voice_id not in valid_ids:
+        raise HTTPException(status_code=404, detail=f"Голос не найден: {voice_id}")
+
+    sample_text = "Привет! Меня зовут ведущий подкаста. Я расскажу вам самое интересное."
+    os.makedirs(settings.audio_dir, exist_ok=True)
+    path = os.path.join(settings.audio_dir, f"sample_{voice_id}.mp3")
+
+    # Кэшируем — не генерируем каждый раз
+    if not os.path.exists(path):
+        await synthesize(sample_text, voice_id, path)
+
+    return FileResponse(path, media_type="audio/mpeg")
+
+
 async def _tts(text: str, voice: str, output_path: str) -> None:
     await synthesize(text, voice, output_path)
 
