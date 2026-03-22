@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ..llm import chat
+
+logger = logging.getLogger("content_service.contract")
 
 router = APIRouter()
 
@@ -76,6 +81,8 @@ def _parse_contract(raw: str) -> dict:
     """,
 )
 async def analyze_contract(req: ContractRequest) -> ContractResponse:
+    logger.info("Contract analysis started chars=%d", len(req.text))
+    started_at = time.perf_counter()
     fmt = (
         '{"parties": ["сторона 1", "сторона 2"], '
         '"subject": "предмет договора — 1-2 предложения дословно из текста", '
@@ -87,6 +94,7 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
     )
 
     # Проход 1: извлечение
+    logger.info("Contract pass 1/2: extracting...")
     extract_user = (
         "Извлеки из договора данные строго по тексту. "
         "Если поле не упоминается явно — оставь пустым.\n\n"
@@ -101,6 +109,7 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
         raise HTTPException(status_code=500, detail="Не удалось разобрать ответ модели (проход 1)")
 
     # Проход 2: верификация
+    logger.info("Contract pass 2/2: verifying...")
     verify_user = (
         "Исходный текст договора:\n"
         f"{req.text}\n\n"
@@ -114,6 +123,7 @@ async def analyze_contract(req: ContractRequest) -> ContractResponse:
 
     try:
         verified = _parse_contract(raw2)
+        logger.info("Contract analysis done %.2fs", time.perf_counter() - started_at)
         return ContractResponse(
             parties=verified.get("parties", []),
             subject=verified.get("subject", ""),

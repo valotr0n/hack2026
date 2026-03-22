@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 from ..llm import chat
+
+logger = logging.getLogger("content_service.summary")
 
 router = APIRouter()
 
@@ -96,12 +100,13 @@ async def _hierarchical_summary(text: str, style: str) -> str:
     sp = _style_prompt(style)
 
     if len(text) <= _CHUNK_SIZE:
-        # Текст небольшой — один проход
+        logger.info("Summary single-pass chars=%d style=%s", len(text), style)
         return await chat(system=_SYSTEM, user=f"{sp}\n\nТекст:\n{text}", temperature=0.3)
 
     # Первый проход: параллельная суммаризация каждого чанка
     chunks = _split_text(text, _CHUNK_SIZE)
     n = len(chunks)
+    logger.info("Summary map-reduce started chars=%d chunks=%d style=%s", len(text), n, style)
     tasks = [
         _summarize_chunk(chunk, f"Часть {i + 1} из {n}:", sp)
         for i, chunk in enumerate(chunks)
@@ -152,5 +157,8 @@ async def _hierarchical_summary(text: str, style: str) -> str:
     """,
 )
 async def generate_summary(req: SummaryRequest) -> SummaryResponse:
+    started_at = time.perf_counter()
+    logger.info("Summary request started chars=%d style=%s", len(req.text), req.style)
     summary = await _hierarchical_summary(req.text, req.style)
+    logger.info("Summary done %.2fs", time.perf_counter() - started_at)
     return SummaryResponse(summary=summary)

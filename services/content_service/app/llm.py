@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import contextvars
+import logging
+import time
 
 import httpx
 from openai import AsyncOpenAI
 
 from .config import settings
+
+logger = logging.getLogger("content_service.llm")
 
 # Переменная контура для текущего запроса (устанавливается middleware)
 contour_var: contextvars.ContextVar[str] = contextvars.ContextVar("contour", default="open")
@@ -34,6 +38,10 @@ async def chat(system: str, user: str, temperature: float = 0.7) -> str:
         client = _open_client
         model = settings.llm_model
 
+    input_chars = len(system) + len(user)
+    logger.info("LLM call started model=%s contour=%s temperature=%.1f input_chars=%d", model, contour, temperature, input_chars)
+    started_at = time.perf_counter()
+
     response = await client.chat.completions.create(
         model=model,
         messages=[
@@ -42,4 +50,8 @@ async def chat(system: str, user: str, temperature: float = 0.7) -> str:
         ],
         temperature=temperature,
     )
-    return response.choices[0].message.content
+
+    elapsed = time.perf_counter() - started_at
+    result = response.choices[0].message.content
+    logger.info("LLM call done model=%s contour=%s output_chars=%d %.2fs", model, contour, len(result), elapsed)
+    return result
