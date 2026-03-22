@@ -13,7 +13,7 @@ logger = logging.getLogger("content_service.flashcards")
 
 router = APIRouter()
 
-_CHUNK_SIZE = 8_000
+_CHUNK_SIZE = 15_000
 
 
 class FlashcardsRequest(BaseModel):
