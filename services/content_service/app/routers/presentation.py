@@ -40,16 +40,15 @@ async def _generate_slides(text: str, title: str, style: str) -> list[dict]:
         + "Верни JSON:\n"
         '{"slides": [\n'
         '  {"type": "title", "title": "...", "subtitle": "..."},\n'
-        '  {"type": "content", "title": "Заголовок слайда", "bullets": ["тезис 1", "тезис 2", "тезис 3"]},\n'
-        '  {"type": "content", "title": "...", "bullets": [...]},\n'
-        '  {"type": "summary", "title": "Итоги", "bullets": ["вывод 1", "вывод 2"]}\n'
+        '  {"type": "content", "title": "Заголовок слайда", "body": "1-2 предложения раскрывающие тему слайда", "bullets": ["тезис 1", "тезис 2", "тезис 3"]},\n'
+        '  {"type": "summary", "title": "Итоги", "body": "общий вывод 1-2 предложения", "bullets": ["вывод 1", "вывод 2"]}\n'
         "]}\n\n"
         "Правила:\n"
         "- Первый слайд всегда type=title\n"
         "- Последний слайд всегда type=summary\n"
         "- 5–10 слайдов итого\n"
-        "- В каждом content-слайде 3–5 bullets\n"
-        "- Bullets — короткие тезисы, не предложения\n\n"
+        "- body — 1-2 предложения контекста или пояснения к слайду\n"
+        "- bullets — 3–5 коротких тезисов\n\n"
         f"Текст:\n{text}"
     )
 
@@ -76,23 +75,24 @@ def _build_pptx(slides: list[dict]) -> bytes:
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
-    # Цвета в стиле банка
-    COLOR_BG = RGBColor(0x00, 0x3A, 0x70)       # тёмно-синий
-    COLOR_ACCENT = RGBColor(0xFF, 0xB8, 0x00)    # золотой
+    FONT = "Geist"
+
+    # Чёрно-белая тема
+    COLOR_BLACK = RGBColor(0x0A, 0x0A, 0x0A)
     COLOR_WHITE = RGBColor(0xFF, 0xFF, 0xFF)
-    COLOR_LIGHT = RGBColor(0xF0, 0xF4, 0xF8)
-    COLOR_TEXT = RGBColor(0x1A, 0x1A, 0x2E)
+    COLOR_GRAY  = RGBColor(0x55, 0x55, 0x55)
+    COLOR_LIGHT = RGBColor(0xF5, 0xF5, 0xF5)
 
     def _set_bg(slide, color: RGBColor) -> None:
-        from pptx.util import Emu
         fill = slide.background.fill
         fill.solid()
         fill.fore_color.rgb = color
 
     def _add_textbox(slide, text: str, left, top, width, height,
                      font_size: int, bold: bool = False,
-                     color: RGBColor = COLOR_WHITE,
-                     align=PP_ALIGN.LEFT) -> None:
+                     color: RGBColor = COLOR_BLACK,
+                     align=PP_ALIGN.LEFT,
+                     italic: bool = False) -> None:
         txBox = slide.shapes.add_textbox(left, top, width, height)
         tf = txBox.text_frame
         tf.word_wrap = True
@@ -100,66 +100,91 @@ def _build_pptx(slides: list[dict]) -> bytes:
         p.alignment = align
         run = p.add_run()
         run.text = text
+        run.font.name = FONT
         run.font.size = Pt(font_size)
         run.font.bold = bold
+        run.font.italic = italic
         run.font.color.rgb = color
 
     for slide_data in slides:
         slide_type = slide_data.get("type", "content")
         title_text = slide_data.get("title", "")
+        body_text = slide_data.get("body", "")
+        bullets = slide_data.get("bullets", [])
 
         if slide_type == "title":
             layout = prs.slide_layouts[6]  # blank
             slide = prs.slides.add_slide(layout)
-            _set_bg(slide, COLOR_BG)
+            _set_bg(slide, COLOR_BLACK)
 
-            # Акцентная полоса слева
-            from pptx.util import Emu
+            # Белая горизонтальная полоса снизу
             bar = slide.shapes.add_shape(
-                1,  # MSO_SHAPE_TYPE.RECTANGLE
-                Inches(0), Inches(0),
-                Inches(0.3), Inches(7.5),
+                1,
+                Inches(0), Inches(6.8),
+                Inches(13.33), Inches(0.05),
             )
             bar.fill.solid()
-            bar.fill.fore_color.rgb = COLOR_ACCENT
+            bar.fill.fore_color.rgb = COLOR_WHITE
             bar.line.fill.background()
 
             _add_textbox(slide, title_text,
-                         Inches(0.7), Inches(2.2), Inches(11.5), Inches(1.8),
-                         font_size=40, bold=True, color=COLOR_WHITE,
+                         Inches(1.0), Inches(2.0), Inches(11.0), Inches(2.0),
+                         font_size=44, bold=True, color=COLOR_WHITE,
                          align=PP_ALIGN.LEFT)
 
             subtitle = slide_data.get("subtitle", "")
             if subtitle:
                 _add_textbox(slide, subtitle,
-                             Inches(0.7), Inches(4.2), Inches(11.5), Inches(1.0),
-                             font_size=22, bold=False, color=COLOR_ACCENT,
+                             Inches(1.0), Inches(4.2), Inches(11.0), Inches(0.8),
+                             font_size=20, color=COLOR_GRAY,
                              align=PP_ALIGN.LEFT)
 
         else:  # content / summary
             layout = prs.slide_layouts[6]
             slide = prs.slides.add_slide(layout)
-            _set_bg(slide, COLOR_LIGHT)
+            _set_bg(slide, COLOR_WHITE)
 
-            # Заголовочная полоса
+            # Чёрная заголовочная полоса
             header = slide.shapes.add_shape(
                 1,
                 Inches(0), Inches(0),
-                Inches(13.33), Inches(1.3),
+                Inches(13.33), Inches(1.2),
             )
             header.fill.solid()
-            header.fill.fore_color.rgb = COLOR_BG
+            header.fill.fore_color.rgb = COLOR_BLACK
             header.line.fill.background()
 
             _add_textbox(slide, title_text,
-                         Inches(0.4), Inches(0.1), Inches(12.5), Inches(1.1),
-                         font_size=28, bold=True, color=COLOR_WHITE)
+                         Inches(0.4), Inches(0.1), Inches(12.5), Inches(1.0),
+                         font_size=26, bold=True, color=COLOR_WHITE)
 
-            bullets = slide_data.get("bullets", [])
-            bullet_text = "\n".join(f"• {b}" for b in bullets)
+            y_offset = Inches(1.35)
+
+            # Body текст под заголовком
+            if body_text:
+                _add_textbox(slide, body_text,
+                             Inches(0.5), y_offset, Inches(12.0), Inches(0.9),
+                             font_size=14, color=COLOR_GRAY, italic=True)
+                y_offset += Inches(1.0)
+
+            # Тонкий разделитель
+            if body_text:
+                sep = slide.shapes.add_shape(
+                    1,
+                    Inches(0.5), y_offset,
+                    Inches(12.33), Inches(0.02),
+                )
+                sep.fill.solid()
+                sep.fill.fore_color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+                sep.line.fill.background()
+                y_offset += Inches(0.15)
+
+            # Буллеты
+            bullet_text = "\n".join(f"— {b}" for b in bullets)
+            remaining = Inches(7.5) - y_offset - Inches(0.2)
             _add_textbox(slide, bullet_text,
-                         Inches(0.6), Inches(1.5), Inches(12.0), Inches(5.5),
-                         font_size=20, bold=False, color=COLOR_TEXT)
+                         Inches(0.5), y_offset, Inches(12.0), remaining,
+                         font_size=18, color=COLOR_BLACK)
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -173,22 +198,6 @@ def _build_pptx(slides: list[dict]) -> bytes:
     "/presentation/preview",
     response_model=PresentationResponse,
     summary="Структура презентации (превью)",
-    description="""
-Генерирует структуру слайдов в JSON — для отображения превью в браузере.
-
-**Параметр `style`:** `business` · `academic` · `popular`
-
-**Ответ:**
-```json
-{
-  "slides": [
-    {"type": "title", "title": "Анализ кредитного портфеля", "subtitle": "Q1 2026"},
-    {"type": "content", "title": "Ключевые показатели", "bullets": ["NPL 2.3%", "ROE 18%"]},
-    {"type": "summary", "title": "Итоги", "bullets": ["Портфель вырос на 12%"]}
-  ]
-}
-```
-    """,
 )
 async def presentation_preview(req: PresentationRequest) -> PresentationResponse:
     slides = await _generate_slides(req.text, req.title, req.style)
@@ -198,20 +207,12 @@ async def presentation_preview(req: PresentationRequest) -> PresentationResponse
 @router.post(
     "/presentation/download",
     summary="Скачать презентацию (PPTX)",
-    description="""
-Генерирует и возвращает готовый файл `.pptx` для скачивания.
-
-**Параметр `style`:** `business` · `academic` · `popular`
-
-Возвращает бинарный файл `presentation.pptx`.
-    """,
 )
 async def presentation_download(req: PresentationRequest) -> StreamingResponse:
     slides = await _generate_slides(req.text, req.title, req.style)
     pptx_bytes = _build_pptx(slides)
-    filename = "presentation.pptx"
     return StreamingResponse(
         io.BytesIO(pptx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": 'attachment; filename="presentation.pptx"'},
     )
