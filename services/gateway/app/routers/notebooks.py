@@ -183,6 +183,32 @@ async def _notebook_text(
     return text
 
 
+async def _notebook_rag_text(
+    client: httpx.AsyncClient,
+    notebook_id: str,
+    query: str,
+    top_k: int = 40,
+) -> str:
+    """Семантически релевантный текст вместо полного — для LLM-фич."""
+    try:
+        resp = await client.post(
+            _rag(f"/notebook/{notebook_id}/search"),
+            json={"query": query, "top_k": top_k},
+        )
+        resp.raise_for_status()
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+    text: str = resp.json().get("text", "")
+    if not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Блокнот пуст — загрузите хотя бы один источник",
+        )
+    return text
+
+
 async def _notebook_response(notebook_id: str, user_id: str) -> "NotebookResponse":
     notebook = _parse_notebook(await _owned_notebook(notebook_id, user_id))
     sources = [_parse_source(s) for s in await list_sources(settings.db_path, notebook_id)]
@@ -832,8 +858,9 @@ async def summary(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    # Для иерархического саммари нужен полный текст без ограничения
-    text = await _notebook_text(client, notebook_id, max_length=None)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="основные идеи, ключевые темы, главные выводы и результаты документа",
+        top_k=40)
 
     try:
         resp = await client.post(
@@ -886,7 +913,9 @@ async def mindmap(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="структура документа, разделы, темы, подтемы и ключевые концепции",
+        top_k=30)
 
     try:
         resp = await client.post(_content("/mindmap"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -927,7 +956,9 @@ async def flashcards(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=None)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="важные факты, определения, ключевые понятия и термины для запоминания",
+        top_k=50)
 
     try:
         resp = await client.post(_content("/flashcards"), json={"text": text, "count": req.count}, headers=_contour_headers(notebook))
@@ -968,7 +999,9 @@ async def podcast(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="интересные факты, главные темы, ключевые идеи для обсуждения в подкасте",
+        top_k=30)
 
     try:
         resp = await client.post(_content("/podcast"), json={"text": text, "tone": req.tone}, headers=_contour_headers(notebook))
@@ -1058,7 +1091,9 @@ async def knowledge_graph(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=None)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="сущности, организации, персоны, концепции и связи между ними",
+        top_k=50)
 
     try:
         resp = await client.post(_content("/knowledge-graph"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1216,7 +1251,9 @@ async def timeline(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=None)
+    text = await _notebook_rag_text(client, notebook_id,
+        query="даты, события, хронология, временная последовательность",
+        top_k=50)
 
     try:
         resp = await client.post(_content("/timeline"), json={"text": text}, headers=_contour_headers(notebook), timeout=300.0)
@@ -1263,6 +1300,13 @@ async def timeline(
 > Результат кэшируется. Повторный запрос возвращает кэш мгновенно. Для перегенерации: `?force=true`
     """,
 )
+_QUESTIONS_RAG_QUERY = {
+    "credit":    "кредитоспособность, залог, поручительство, доходы, обязательства, риски кредита",
+    "legal":     "обязательства сторон, условия расторжения, штрафы, санкции, неясные формулировки",
+    "financial": "финансовые показатели, выручка, прибыль, долг, активы, риски",
+    "general":   "пробелы в информации, неясные моменты, риски, требуемые уточнения",
+}
+
 async def generate_questions(
     notebook_id: str,
     req: QuestionsRequest,
@@ -1271,7 +1315,8 @@ async def generate_questions(
 ) -> dict[str, Any]:
     notebook = await _owned_notebook(notebook_id, user_id)
     client: httpx.AsyncClient = request.app.state.http_client
-    text = await _notebook_text(client, notebook_id, max_length=None)
+    rag_query = _QUESTIONS_RAG_QUERY.get(req.context, _QUESTIONS_RAG_QUERY["general"])
+    text = await _notebook_rag_text(client, notebook_id, query=rag_query, top_k=50)
 
     try:
         resp = await client.post(_content("/questions"), json={"text": text, "context": req.context}, headers=_contour_headers(notebook), timeout=300.0)

@@ -449,6 +449,44 @@ async def get_source_content(
     return {"text": "\n\n".join(texts), "filename": filename}
 
 
+async def search_notebook_text(
+    notebook_id: str,
+    query_embedding: list[float],
+    top_k: int = 40,
+) -> str:
+    """Семантический поиск по коллекции ноутбука, возвращает склеенный текст чанков.
+    В отличие от search_document_chunks — не бросает 404 если мало результатов,
+    и сортирует чанки по chunk_index для связности текста."""
+    query_result = await _qdrant_request(
+        "POST",
+        f"/collections/{notebook_id}/points/query",
+        {
+            "query": query_embedding,
+            "limit": top_k,
+            "with_payload": True,
+        },
+    )
+    result = query_result.get("result") or {}
+    points = result.get("points") or []
+
+    # Сортируем по источнику + chunk_index чтобы текст был связным
+    points.sort(key=lambda p: (
+        p.get("payload", {}).get("source", ""),
+        p.get("payload", {}).get("chunk_index", 0),
+    ))
+
+    texts = [
+        p["payload"]["text"]
+        for p in points
+        if p.get("payload", {}).get("text", "").strip()
+    ]
+    logger.info(
+        "RAG search notebook_id=%s top_k=%d found=%d",
+        notebook_id, top_k, len(texts),
+    )
+    return "\n\n".join(texts)
+
+
 async def delete_source_chunks(collection_id: str, source_id: str) -> None:
     await _qdrant_request(
         "POST",
@@ -506,6 +544,7 @@ async def get_notebook_content(collection_id: str) -> dict[str, Any]:
 async def search_document_chunks(
     doc_id: str,
     query_embedding: list[float],
+    top_k: int = TOP_K,
 ) -> list[dict[str, Any]]:
     await _qdrant_request("GET", f"/collections/{doc_id}")
     query_result = await _qdrant_request(
@@ -513,7 +552,7 @@ async def search_document_chunks(
         f"/collections/{doc_id}/points/query",
         {
             "query": query_embedding,
-            "limit": TOP_K,
+            "limit": top_k,
             "with_payload": True,
         },
     )
