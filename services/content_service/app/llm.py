@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import logging
 import time
@@ -10,6 +11,9 @@ from openai import AsyncOpenAI
 from .config import settings
 
 logger = logging.getLogger("content_service.llm")
+
+# Не более 2 одновременных LLM-вызовов — API обрабатывает запросы последовательно
+_llm_semaphore = asyncio.Semaphore(2)
 
 # Переменная контура для текущего запроса (устанавливается middleware)
 contour_var: contextvars.ContextVar[str] = contextvars.ContextVar("contour", default="open")
@@ -41,17 +45,18 @@ async def chat(system: str, user: str, temperature: float = 0.7) -> str:
         model = settings.llm_model
 
     input_chars = len(system) + len(user)
-    logger.info("LLM call started model=%s contour=%s temperature=%.1f input_chars=%d", model, contour, temperature, input_chars)
     started_at = time.perf_counter()
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=temperature,
-    )
+    async with _llm_semaphore:
+        logger.info("LLM call started model=%s contour=%s temperature=%.1f input_chars=%d", model, contour, temperature, input_chars)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature,
+        )
 
     elapsed = time.perf_counter() - started_at
     result = response.choices[0].message.content
