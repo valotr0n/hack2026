@@ -14,6 +14,7 @@ class PresentationRequest(BaseModel):
     text: str
     title: str = ""
     style: str = "business"  # business | academic | popular
+    prompt: str = ""  # дополнительные инструкции от пользователя
 
 
 class PresentationResponse(BaseModel):
@@ -22,7 +23,7 @@ class PresentationResponse(BaseModel):
 
 # ── JSON структура слайдов ────────────────────────────────────────────────────
 
-async def _generate_slides(text: str, title: str, style: str) -> list[dict]:
+async def _generate_slides(text: str, title: str, style: str, prompt: str = "") -> list[dict]:
     style_prompt = {
         "business": "деловой корпоративный стиль, чёткие тезисы, минимум воды",
         "academic": "академический стиль, подробные объяснения, термины",
@@ -31,12 +32,15 @@ async def _generate_slides(text: str, title: str, style: str) -> list[dict]:
 
     system = (
         "Ты — эксперт по созданию презентаций. "
+        "Используй предоставленный текст как основу, дополняя своими знаниями там где это уместно. "
         "Структурируй материал в чёткие, ёмкие слайды. "
         "Отвечай строго в формате JSON без лишнего текста."
     )
+
     user = (
         f"Создай презентацию в {style_prompt} по тексту ниже.\n"
         + (f'Заголовок презентации: "{title}"\n' if title else "")
+        + (f"Дополнительные инструкции от пользователя: {prompt}\n" if prompt.strip() else "")
         + "Верни JSON строго в этом формате:\n"
         '{"slides": [\n'
         '  {"type": "title", "title": "Название презентации", "subtitle": "Подзаголовок"},\n'
@@ -201,7 +205,7 @@ def _build_pptx(slides: list[dict]) -> bytes:
     summary="Структура презентации (превью)",
 )
 async def presentation_preview(req: PresentationRequest) -> PresentationResponse:
-    slides = await _generate_slides(req.text, req.title, req.style)
+    slides = await _generate_slides(req.text, req.title, req.style, req.prompt)
     return PresentationResponse(slides=slides)
 
 
@@ -210,7 +214,7 @@ async def presentation_preview(req: PresentationRequest) -> PresentationResponse
     summary="Скачать презентацию (PPTX)",
 )
 async def presentation_download(req: PresentationRequest) -> StreamingResponse:
-    slides = await _generate_slides(req.text, req.title, req.style)
+    slides = await _generate_slides(req.text, req.title, req.style, req.prompt)
     pptx_bytes = _build_pptx(slides)
     return StreamingResponse(
         io.BytesIO(pptx_bytes),

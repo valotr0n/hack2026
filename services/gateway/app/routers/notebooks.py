@@ -333,6 +333,7 @@ class CompareRequest(BaseModel):
 class PresentationRequest(BaseModel):
     title: str = ""
     style: str = "business"  # business | academic | popular
+    prompt: str = ""  # дополнительные инструкции от пользователя
 
 
 class UrlSourceRequest(BaseModel):
@@ -1533,7 +1534,7 @@ async def presentation_preview(
     try:
         resp = await client.post(
             _content("/presentation/preview"),
-            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            json={"text": text, "title": req.title or notebook["title"], "style": req.style, "prompt": req.prompt},
             headers=_contour_headers(notebook),
         )
         resp.raise_for_status()
@@ -1569,7 +1570,7 @@ async def presentation_download(
     try:
         resp = await client.post(
             _content("/presentation/download"),
-            json={"text": text, "title": req.title or notebook["title"], "style": req.style},
+            json={"text": text, "title": req.title or notebook["title"], "style": req.style, "prompt": req.prompt},
             headers=_contour_headers(notebook),
             timeout=120.0,
         )
